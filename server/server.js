@@ -5,7 +5,7 @@ const path = require("path");
 const multer = require("multer");
 const axios = require("axios");
 const FormData = require("form-data");
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 const db = require("./db");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { tavily } = require("@tavily/core");
@@ -20,6 +20,11 @@ const GEMINI_API_KEY = "AIzaSyA8t4ehEcTCz14tuI6DLSznGNRvWqzKj7Y";
 const TAVILY_API_KEY = "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";
 const DEEPAI_API_KEY = "d69c64d0-d7dd-4670-999b-3121add422d4";
 
+// Resend API key (provided by user)
+const RESEND_API_KEY = "re_FTEQjwtn_CY6tjZr7kyDuMrwNsYU6uMDL";
+
+const resend = new Resend(RESEND_API_KEY);
+
 const tvly = tavily({ apiKey: TAVILY_API_KEY });
 
 let model = null;
@@ -30,15 +35,6 @@ try {
 } catch (err) {
   console.log("⚠️ Gemini not available:", err.message);
 }
-
-// ========== NODEMAILER (Gmail) ==========
-const EMAIL_USER = "ranjiitbhagat31082003@gmail.com";
-const EMAIL_PASS = "ihqakikvyuimcluu";
-
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: { user: EMAIL_USER, pass: EMAIL_PASS },
-});
 
 // ========== MULTER ==========
 const storage = multer.memoryStorage();
@@ -56,7 +52,7 @@ const upload = multer({
 let otpStore = {};
 let verifiedUsers = {};
 
-// ========== SEND OTP VIA EMAIL ==========
+// ========== SEND OTP VIA RESEND (fire-and-forget, instant response) ==========
 app.post("/send-otp", async (req, res) => {
   let { email } = req.body;
   if (!email) return res.json({ success: false, message: "Email required ❌" });
@@ -67,9 +63,9 @@ app.post("/send-otp", async (req, res) => {
   const otp = Math.floor(100000 + Math.random() * 900000);
   otpStore[email] = otp;
 
-  // Send email in background (don't await)
-  const mailOptions = {
-    from: EMAIL_USER,
+  // Send email via Resend in the background (fire and forget)
+  resend.emails.send({
+    from: "RanAI <onboarding@resend.dev>", // You can change to your verified domain later
     to: email,
     subject: "Your RanAI OTP Code",
     html: `<div style="font-family:Arial;max-width:500px;margin:auto;padding:20px;border:1px solid #ddd;border-radius:10px;">
@@ -77,19 +73,18 @@ app.post("/send-otp", async (req, res) => {
       <p>Your OTP for signup is:</p>
       <div style="font-size:32px;font-weight:bold;color:#10a37f;margin:20px 0;">${otp}</div>
       <p>Valid for 10 minutes.</p>
-      <hr><p style="font-size:12px;color:#888;">Ignore if not requested.</p></div>`,
-  };
-
-  // Fire and forget – no await
-  transporter.sendMail(mailOptions).then(() => {
+      <hr><p style="font-size:12px;color:#888;">If you didn't request this, ignore this email.</p>
+    </div>`,
+  }).then(() => {
     console.log(`📧 OTP sent to ${email}: ${otp}`);
   }).catch(err => {
-    console.error("Email send error:", err);
+    console.error("Resend error:", err);
   });
 
   // Respond immediately to the user
-  res.json({ success: true, message: "OTP sent to your email 📧 (check spam folder)" });
+  res.json({ success: true, message: "OTP sent to your email 📧 (check inbox)" });
 });
+
 app.post("/verify-otp", (req, res) => {
   let { email, otp } = req.body;
   if (!email || !otp) return res.json({ success: false, message: "Missing data ❌" });
@@ -131,7 +126,7 @@ app.post("/signup", async (req, res) => {
   }
 });
 
-// ========== LOGIN ENDPOINT (ADDED) ==========
+// ========== LOGIN ENDPOINT ==========
 app.post("/login", async (req, res) => {
   try {
     let { email, password } = req.body;
@@ -152,7 +147,6 @@ app.post("/login", async (req, res) => {
         if (!match) {
           return res.json({ success: false, message: "Invalid credentials ❌" });
         }
-        // Login successful
         res.json({
           success: true,
           message: "Login successful 🎉",
@@ -171,7 +165,7 @@ app.post("/login", async (req, res) => {
   }
 });
 
-// ========== LOCAL RESPONSE HANDLER ==========
+// ========== LOCAL RESPONSE HANDLER (unchanged) ==========
 function detectLanguage(text) {
   const t = text.trim();
   if (/[\u0900-\u097F]/.test(t)) return 'hi';
@@ -196,31 +190,22 @@ function getLocalResponse(question) {
   const lang = detectLanguage(question);
   const hi = lang === 'hi';
 
-  // 1. Greetings
   if (/^(hi|hello|hey|namaste|hlo|hii|hola|sup|yo)/i.test(q)) {
     if (hi) return "नमस्ते! 😊 मेरा नाम RanAi है। आपसे मिलकर खुशी हुई। कोई सवाल पूछिए?";
     else return "Hello! 😊 I'm RanAi. Nice to meet you. How can I help?";
   }
-
-  // 2. Ask name
   if (/(what is your name|your name|tumhara naam kya|aapka naam|who are you)/i.test(q)) {
     if (hi) return "मेरा नाम RanAi है। मैं एक AI सहायक हूँ।";
     else return "My name is RanAi. I'm an AI assistant.";
   }
-
-  // 3. Who created you?
   if (/(who (made|created|built) you|tumko kisne banaya|aapko kisne banaya|your creator)/i.test(q)) {
     if (hi) return "मुझे **R@njit** ने बनाया है। वह एक शानदार डेवलपर हैं! 😊";
     else return "I was created by **R@njit**, a brilliant developer! 😊";
   }
-
-  // 4. I love you
   if (/(i love you|love you|main tumse pyar karta|i <3 you)/i.test(q)) {
     if (hi) return "ओह! 😊 शुक्रिया, लेकिन मैं तो एक AI हूँ। फिर भी, आपका प्यार मेरे लिए बहुत मायने रखता है! ❤️";
     else return "Oh! 😊 Thank you, but I'm just an AI. Still, your love means a lot! ❤️";
   }
-
-  // 5. Table of a number
   let tableMatch = q.match(/(?:table of|ka table|ka pahada|table)\s+(\d+)/i);
   if (tableMatch) {
     let num = parseInt(tableMatch[1]);
@@ -232,8 +217,6 @@ function getLocalResponse(question) {
       return hi ? "कृपया 1 से 1000 के बीच की संख्या दें।" : "Please enter a number between 1 and 1000.";
     }
   }
-
-  // 6. Numbers from 1 to N
   let rangeMatch = q.match(/(?:numbers?|1 to|from 1 to)\s*(\d+)/i);
   if (rangeMatch) {
     let max = parseInt(rangeMatch[1]);
@@ -251,8 +234,6 @@ function getLocalResponse(question) {
       return hi ? "कृपया 1 से 1000 के बीच की अधिकतम संख्या दें।" : "Please enter a maximum number between 1 and 1000.";
     }
   }
-
-  // 7. Math expression evaluation
   let mathExpr = q.replace(/(what is|calculate|solve|evaluate|find|value of|the answer to)/gi, '').trim();
   if (mathExpr.match(/^[\d\s\+\-\*\/\(\)\.\^%]+$/)) {
     const result = evaluateMath(mathExpr);
@@ -261,8 +242,6 @@ function getLocalResponse(question) {
       else return `Result: ${mathExpr} = ${result}`;
     }
   }
-
-  // Explicit operations
   let opMatch = q.match(/(\d+)\s*\+\s*(\d+)/);
   if (opMatch) {
     let a = parseInt(opMatch[1]), b = parseInt(opMatch[2]);
@@ -288,8 +267,6 @@ function getLocalResponse(question) {
     if (hi) return `${a} ÷ ${b} = ${a/b}`;
     else return `${a} ÷ ${b} = ${a/b}`;
   }
-
-  // Chit-chat
   if (/(how are you|kaise ho|kya haal)/i.test(q)) {
     if (hi) return "मैं बिल्कुल ठीक हूँ, शुक्रिया! आप कैसे हैं? 😊";
     else return "I'm doing great, thanks! How about you? 😊";
@@ -310,22 +287,19 @@ function getLocalResponse(question) {
     if (hi) return "मैं सवालों के जवाब दे सकता हूँ, गणित हल कर सकता हूँ, टेबल बना सकता हूँ, इमेज पहचान सकता हूँ, और बहुत कुछ!";
     else return "I can answer questions, solve math, generate tables, analyze images, and much more!";
   }
-
   return null;
 }
 
-// ========== /ask ENDPOINT (with local responses) ==========
+// ========== /ask ENDPOINT ==========
 app.post("/ask", async (req, res) => {
   const { question } = req.body;
   if (!question || question.trim() === "") {
     return res.json({ success: false, reply: "कृपया कुछ पूछें!" });
   }
-
   const localReply = getLocalResponse(question);
   if (localReply) {
     return res.json({ success: true, reply: localReply });
   }
-
   try {
     const response = await tvly.search(question, {
       searchDepth: "advanced",
@@ -454,7 +428,7 @@ app.listen(PORT, () => {
   console.log(`✅ Tavily AI ready`);
   console.log(`✅ DeepAI ready`);
   console.log(`✅ Gemini Vision ready`);
-  console.log(`📧 OTP sent via email`);
+  console.log(`📧 OTP sent via Resend (high deliverability, instant response)`);
   console.log(`🔐 Login endpoint added`);
   console.log(`💬 Local conversation & math handler active`);
 });
