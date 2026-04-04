@@ -30,7 +30,7 @@ const elements = {
   attachmentPreview: $('attachmentPreview'),
 };
 
-const API = "http://localhost:5000"; // Change to your deployed URL
+const API = "https://ran-ai.onrender.com";  // Your deployed backend URL // Change to your deployed URL
 
 let currentConversationId = null;
 let conversations = [];
