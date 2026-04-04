@@ -969,3 +969,16 @@ a:hover { text-decoration:underline; }
   color: var(--accent);
   background: rgba(var(--accent-rgb),0.1);
 }
+.signup-modal {
+  display: none; /* Hidden by default, script will show when needed */
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  backdrop-filter: blur(10px);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+.signup-modal[style*="display: flex"] {
+  display: flex !important;
+}
