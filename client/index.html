@@ -179,7 +179,7 @@
     </button>
   </div>
 
-  <!-- ═══ SIGNUP MODAL ═══ -->
+  <!-- ═══ LOGIN / SIGNUP MODAL (with tabs) ═══ -->
   <div class="signup-modal" id="signupModal">
     <div class="modal-bg-anim"></div>
     <div class="signup-box">
@@ -190,51 +190,73 @@
         <span class="signup-brand-name">RanAI</span>
       </div>
 
-      <div id="signupStep1">
-        <h2 class="signup-title">Welcome back</h2>
-        <p class="signup-sub">Verify your email to continue</p>
-        <div class="form-group">
-          <label>Email address</label>
-          <input type="email" id="email" placeholder="you@example.com" autocomplete="email" />
-        </div>
-        <button id="sendOtpBtn" class="btn-primary">
-          <span>Send OTP</span>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-        </button>
-        <div class="form-group" style="margin-top:14px;">
-          <label>Enter OTP</label>
-          <input type="text" id="otp" placeholder="6-digit code" maxlength="6" autocomplete="one-time-code" />
-        </div>
-        <button id="verifyOtpBtn" class="btn-secondary">Verify OTP</button>
-        <div id="otpMessage"></div>
+      <!-- Tab headers -->
+      <div class="auth-tabs">
+        <button class="auth-tab active" id="tabSignupBtn">Sign Up</button>
+        <button class="auth-tab" id="tabLoginBtn">Log In</button>
       </div>
 
-      <div id="signupStep2" style="display:none;">
-        <h2 class="signup-title">Almost there!</h2>
-        <p class="signup-sub">Set up your profile</p>
-        <div class="form-row">
+      <!-- SIGNUP FORM (OTP) -->
+      <div id="signupForm">
+        <div id="signupStep1">
           <div class="form-group">
-            <label>First Name</label>
-            <input type="text" id="firstName" placeholder="Ranjan" autocomplete="given-name" />
+            <label>Email address</label>
+            <input type="email" id="signupEmail" placeholder="you@example.com" autocomplete="email" />
+          </div>
+          <button id="sendOtpBtn" class="btn-primary">
+            <span>Send OTP</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+          </button>
+          <div class="form-group" style="margin-top:14px;">
+            <label>Enter OTP</label>
+            <input type="text" id="otp" placeholder="6-digit code" maxlength="6" autocomplete="one-time-code" />
+          </div>
+          <button id="verifyOtpBtn" class="btn-secondary">Verify OTP</button>
+          <div id="otpMessage"></div>
+        </div>
+
+        <div id="signupStep2" style="display:none;">
+          <div class="form-row">
+            <div class="form-group">
+              <label>First Name</label>
+              <input type="text" id="firstName" placeholder="First name" autocomplete="given-name" />
+            </div>
+            <div class="form-group">
+              <label>Last Name</label>
+              <input type="text" id="lastName" placeholder="Last name" autocomplete="family-name" />
+            </div>
           </div>
           <div class="form-group">
-            <label>Last Name</label>
-            <input type="text" id="lastName" placeholder="Singh" autocomplete="family-name" />
+            <label>Password</label>
+            <div class="password-wrap">
+              <input type="password" id="password" placeholder="Abcd23456@" autocomplete="new-password" />
+              <button class="toggle-pass" id="togglePass" type="button">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
           </div>
+          <button id="signupBtn" class="btn-primary">
+            <span>Create Account</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="20 6 9 17 4 12"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- LOGIN FORM -->
+      <div id="loginForm" style="display:none;">
+        <div class="form-group">
+          <label>Email address</label>
+          <input type="email" id="loginEmail" placeholder="you@example.com" autocomplete="email" />
         </div>
         <div class="form-group">
           <label>Password</label>
-          <div class="password-wrap">
-            <input type="password" id="password" placeholder="Create a password" autocomplete="new-password" />
-            <button class="toggle-pass" id="togglePass" type="button">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-            </button>
-          </div>
+          <input type="password" id="loginPassword" placeholder="Axyz1234@" autocomplete="current-password" />
         </div>
-        <button id="signupBtn" class="btn-primary">
-          <span>Create Account</span>
+        <button id="doLoginBtn" class="btn-primary">
+          <span>Log In</span>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="20 6 9 17 4 12"/></svg>
         </button>
+        <div id="loginMessage"></div>
       </div>
 
       <p class="signup-footer">By continuing, you agree to our <a href="#">Terms</a> &amp; <a href="#">Privacy</a></p>
