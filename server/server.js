@@ -63,8 +63,11 @@ app.post("/send-otp", async (req, res) => {
   email = email.toLowerCase();
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) return res.json({ success: false, message: "Invalid Email ❌" });
+  
   const otp = Math.floor(100000 + Math.random() * 900000);
   otpStore[email] = otp;
+
+  // Send email in background (don't await)
   const mailOptions = {
     from: EMAIL_USER,
     to: email,
@@ -76,16 +79,17 @@ app.post("/send-otp", async (req, res) => {
       <p>Valid for 10 minutes.</p>
       <hr><p style="font-size:12px;color:#888;">Ignore if not requested.</p></div>`,
   };
-  try {
-    await transporter.sendMail(mailOptions);
-    console.log(`📧 OTP sent to ${email}: ${otp}`);
-    res.json({ success: true, message: "OTP sent to your email 📧" });
-  } catch (err) {
-    console.error("Email send error:", err);
-    res.json({ success: false, message: "Failed to send OTP. Check email configuration." });
-  }
-});
 
+  // Fire and forget – no await
+  transporter.sendMail(mailOptions).then(() => {
+    console.log(`📧 OTP sent to ${email}: ${otp}`);
+  }).catch(err => {
+    console.error("Email send error:", err);
+  });
+
+  // Respond immediately to the user
+  res.json({ success: true, message: "OTP sent to your email 📧 (check spam folder)" });
+});
 app.post("/verify-otp", (req, res) => {
   let { email, otp } = req.body;
   if (!email || !otp) return res.json({ success: false, message: "Missing data ❌" });
