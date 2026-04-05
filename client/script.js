@@ -1,7 +1,7 @@
 'use strict';
 
 /* ════════════════════════════════════════════════════
-   RanAI – Guest Mode (No Login Required)
+   RanAI – Guest Mode (No Login Required) – with refresh persistence
 ════════════════════════════════════════════════════ */
 
 const $ = (id) => document.getElementById(id);
@@ -144,7 +144,7 @@ function scrollToBottom() {
 }
 
 /* ════════════════════════════
-   MESSAGES
+   MESSAGES – with localStorage persistence
 ════════════════════════════ */
 function addMessage(role, text, saveToConversation = true) {
   const container = elements.chatMessages;
@@ -186,7 +186,7 @@ function addMessage(role, text, saveToConversation = true) {
       if (role === 'user' && conv.messages.filter(m=>m.role==='user').length === 1 && conv.title === 'New conversation') {
         conv.title = text.length > 32 ? text.substring(0, 32) + '…' : text;
       }
-      saveConversationsToSession();
+      saveConversationsToLocalStorage();   // ✅ save to localStorage
       renderConversationList();
     }
   }
@@ -354,17 +354,17 @@ function renderAttachments() {
 }
 
 /* ════════════════════════════
-   CONVERSATIONS
+   CONVERSATIONS – now using localStorage (persists after refresh)
 ════════════════════════════ */
-function saveConversationsToSession() {
-  sessionStorage.setItem('ranai_conversations', JSON.stringify(conversations));
-  sessionStorage.setItem('ranai_currentConvId', currentConversationId);
+function saveConversationsToLocalStorage() {
+  localStorage.setItem('ranai_conversations', JSON.stringify(conversations));
+  localStorage.setItem('ranai_currentConvId', currentConversationId);
 }
 
-function loadConversationsFromSession() {
-  const saved = sessionStorage.getItem('ranai_conversations');
+function loadConversationsFromLocalStorage() {
+  const saved = localStorage.getItem('ranai_conversations');
   if (saved) conversations = JSON.parse(saved);
-  const savedId = sessionStorage.getItem('ranai_currentConvId');
+  const savedId = localStorage.getItem('ranai_currentConvId');
   if (savedId && conversations.find(c => c.id === savedId)) currentConversationId = savedId;
   else if (conversations.length) currentConversationId = conversations[0].id;
   else newConversation();
@@ -376,7 +376,7 @@ function newConversation() {
   const id = Date.now().toString();
   conversations.unshift({ id, title: 'New conversation', messages: [], createdAt: new Date().toISOString() });
   currentConversationId = id;
-  saveConversationsToSession();
+  saveConversationsToLocalStorage();
   renderConversationList();
   clearChatArea();
 }
@@ -411,7 +411,7 @@ function deleteConversation(id) {
     if (conversations.length) currentConversationId = conversations[0].id;
     else { newConversation(); return; }
   }
-  saveConversationsToSession();
+  saveConversationsToLocalStorage();
   renderConversationList();
   loadConversationMessages();
   showToast('Conversation deleted');
@@ -456,7 +456,7 @@ function initConversationEvents() {
     const item = e.target.closest('.conv-item');
     if (item && item.dataset.id !== currentConversationId) {
       currentConversationId = item.dataset.id;
-      saveConversationsToSession();
+      saveConversationsToLocalStorage();
       renderConversationList();
       loadConversationMessages();
       if (window.innerWidth <= 768) closeSidebarMobile();
@@ -659,16 +659,14 @@ function initEventListeners() {
 }
 
 /* ════════════════════════════
-   INIT (Guest Mode – No Login)
+   INIT (Guest Mode – No Login) with localStorage persistence
 ════════════════════════════ */
 window.onload = () => {
-  // Directly show main app as guest
   elements.main.style.display = 'flex';
   updateUserUI();
-  loadConversationsFromSession();
+  loadConversationsFromLocalStorage();   // ✅ changed from session to localStorage
   loadSuggestions();
   
-  // Initialize UI components
   initSidebar();
   initModelDropdown();
   initUserMenu();
@@ -676,4 +674,4 @@ window.onload = () => {
   initToolBtns();
   initEventListeners();
   initConversationEvents();
-};
+}; 
