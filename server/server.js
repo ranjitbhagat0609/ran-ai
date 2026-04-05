@@ -8,7 +8,7 @@ const path = require("path");
 const multer = require("multer");
 const axios = require("axios");
 const FormData = require("form-data");
-const db = require("./db");
+const { supabase, sql } = require("./db"); // ← changed from 'db'
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { tavily } = require("@tavily/core");
 
@@ -22,30 +22,31 @@ app.use(session({
   secret: "ranai_super_secret_123",
   resave: false,
   saveUninitialized: true,
-  cookie: { secure: true }   // set false if not using HTTPS locally
+  cookie: { secure: false }   // set true if using HTTPS in production
 }));
 app.use(passport.initialize());
 app.use(passport.session());
 
 const JWT_SECRET = "ranai_jwt_secret_456";
 
-// ========== DATABASE SCHEMA (MySQL 5.7+ compatible) ==========
-const initDB = () => {
-  const createUsersTable = `
-    CREATE TABLE IF NOT EXISTS users (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      email VARCHAR(255) UNIQUE,
-      google_id VARCHAR(255),
-      picture TEXT,
-      name VARCHAR(255),
-      profile_completed BOOLEAN DEFAULT FALSE,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `;
-  db.query(createUsersTable, (err) => {
-    if (err) console.error("❌ Table creation error:", err);
-    else console.log("✅ Users table ready");
-  });
+// ========== DATABASE SCHEMA (PostgreSQL) ==========
+const initDB = async () => {
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(255) UNIQUE,
+        google_id VARCHAR(255),
+        picture TEXT,
+        name VARCHAR(255),
+        profile_completed BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    console.log("✅ Users table ready (PostgreSQL)");
+  } catch (err) {
+    console.error("❌ Table creation error:", err);
+  }
 };
 initDB();
 
@@ -91,32 +92,31 @@ passport.use(new GoogleStrategy({
       const picture = profile.photos[0]?.value || "";
       const name = profile.displayName;
 
-      db.query("SELECT * FROM users WHERE email = ?", [email], async (err, results) => {
-        if (err) return done(err);
-        if (results.length === 0) {
-          db.query(
-            "INSERT INTO users (email, google_id, picture, name, profile_completed) VALUES (?, ?, ?, ?, ?)",
-            [email, googleId, picture, name, false],
-            (err, result) => {
-              if (err) return done(err);
-              const newUser = { id: result.insertId, email, name, picture, profile_completed: false };
-              return done(null, newUser);
-            }
-          );
-        } else {
-          const user = results[0];
-          if (!user.google_id || user.picture !== picture) {
-            db.query("UPDATE users SET google_id = ?, picture = ? WHERE email = ?", [googleId, picture, email]);
-          }
-          return done(null, {
-            id: user.id,
-            email: user.email,
-            name: user.name,
-            picture: user.picture,
-            profile_completed: user.profile_completed
-          });
+      const existing = await sql`SELECT * FROM users WHERE email = ${email}`;
+      if (existing.length === 0) {
+        const inserted = await sql`
+          INSERT INTO users (email, google_id, picture, name, profile_completed)
+          VALUES (${email}, ${googleId}, ${picture}, ${name}, false)
+          RETURNING id, email, name, picture, profile_completed
+        `;
+        const newUser = inserted[0];
+        return done(null, newUser);
+      } else {
+        const user = existing[0];
+        if (!user.google_id || user.picture !== picture) {
+          await sql`
+            UPDATE users SET google_id = ${googleId}, picture = ${picture}
+            WHERE email = ${email}
+          `;
         }
-      });
+        return done(null, {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          picture: user.picture,
+          profile_completed: user.profile_completed
+        });
+      }
     } catch (error) {
       return done(error);
     }
@@ -124,11 +124,15 @@ passport.use(new GoogleStrategy({
 ));
 
 passport.serializeUser((user, done) => done(null, user.id));
-passport.deserializeUser((id, done) => {
-  db.query("SELECT id, email, name, picture, profile_completed FROM users WHERE id = ?", [id], (err, results) => {
-    if (err) return done(err);
-    done(null, results[0] || null);
-  });
+passport.deserializeUser(async (id, done) => {
+  try {
+    const result = await sql`
+      SELECT id, email, name, picture, profile_completed FROM users WHERE id = ${id}
+    `;
+    done(null, result[0] || null);
+  } catch (err) {
+    done(err, null);
+  }
 });
 
 // ========== AUTH ROUTES ==========
@@ -151,22 +155,23 @@ app.get("/auth/google/callback",
   }
 );
 
-app.get("/auth/me", (req, res) => {
+app.get("/auth/me", async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ success: false, message: "No token" });
   const token = authHeader.split(" ")[1];
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    db.query("SELECT id, email, name, picture, profile_completed FROM users WHERE id = ?", [decoded.id], (err, results) => {
-      if (err || results.length === 0) return res.status(401).json({ success: false });
-      res.json({ success: true, user: results[0] });
-    });
+    const results = await sql`
+      SELECT id, email, name, picture, profile_completed FROM users WHERE id = ${decoded.id}
+    `;
+    if (results.length === 0) return res.status(401).json({ success: false });
+    res.json({ success: true, user: results[0] });
   } catch (err) {
     res.status(401).json({ success: false });
   }
 });
 
-app.post("/complete-profile", (req, res) => {
+app.post("/complete-profile", async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ success: false });
   const token = authHeader.split(" ")[1];
@@ -176,15 +181,18 @@ app.post("/complete-profile", (req, res) => {
     if (!name || name.trim() === "") {
       return res.json({ success: false, message: "Name is required" });
     }
-    db.query("UPDATE users SET name = ?, profile_completed = true WHERE id = ?", [name.trim(), decoded.id], (err) => {
-      if (err) return res.json({ success: false, message: "Database error" });
-      const newToken = jwt.sign(
-        { id: decoded.id, email: decoded.email, name: name.trim(), profile_completed: true },
-        JWT_SECRET,
-        { expiresIn: "7d" }
-      );
-      res.json({ success: true, token: newToken, user: { name: name.trim(), profile_completed: true } });
-    });
+    const updated = await sql`
+      UPDATE users SET name = ${name.trim()}, profile_completed = true
+      WHERE id = ${decoded.id}
+      RETURNING id, email, name, picture, profile_completed
+    `;
+    if (updated.length === 0) throw new Error("Update failed");
+    const newToken = jwt.sign(
+      { id: decoded.id, email: decoded.email, name: name.trim(), profile_completed: true },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+    res.json({ success: true, token: newToken, user: updated[0] });
   } catch (err) {
     res.status(401).json({ success: false });
   }
