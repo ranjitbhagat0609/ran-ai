@@ -1,47 +1,49 @@
 'use strict';
 
 /* ════════════════════════════════════════════════════
-   RanAI – Complete Script (Login/Signup + Chat + Particles)
+   RanAI – Google Sign‑In Only (No OTP)
 ════════════════════════════════════════════════════ */
 
 const $ = (id) => document.getElementById(id);
 
 const elements = {
-  sidebar: $('sidebar'),
-  sidebarToggle: $('sidebarToggle'),
-  sidebarOverlay: $('sidebarOverlay'),
-  newChatBtn: $('newChatBtn'),
-  main: $('main'),
-  signupModal: $('signupModal'),
-  msgTextarea: $('msgTextarea'),
-  sendBtn: $('sendBtn'),
-  chatMessages: $('chatMessages'),
-  hero: $('hero'),
-  typingIndicator: $('typingIndicator'),
-  modelPill: $('modelPill'),
-  modelDropdown: $('modelDropdown'),
-  userRow: $('userRow'),
-  userDropdown: $('userDropdown'),
-  topbarAvatar: $('topbarAvatar'),
-  profileModal: $('profileModal'),
-  convList: $('convList'),
-  searchConv: $('searchConv'),
-  attachBtn: $('attachBtn'),
+  sidebar:           $('sidebar'),
+  sidebarToggle:     $('sidebarToggle'),
+  sidebarOverlay:    $('sidebarOverlay'),
+  newChatBtn:        $('newChatBtn'),
+  main:              $('main'),
+  authModal:         $('authModal'),
+  nameModal:         $('nameModal'),
+  msgTextarea:       $('msgTextarea'),
+  sendBtn:           $('sendBtn'),
+  chatMessages:      $('chatMessages'),
+  hero:              $('hero'),
+  typingIndicator:   $('typingIndicator'),
+  modelPill:         $('modelPill'),
+  modelDropdown:     $('modelDropdown'),
+  userRow:           $('userRow'),
+  userDropdown:      $('userDropdown'),
+  topbarAvatar:      $('topbarAvatar'),
+  profileModal:      $('profileModal'),
+  convList:          $('convList'),
+  searchConv:        $('searchConv'),
+  attachBtn:         $('attachBtn'),
   attachmentPreview: $('attachmentPreview'),
 };
 
-const API = "https://ran-ai.onrender.com";  // Your deployed backend URL // Change to your deployed URL
+// Backend URL (change if needed)
+const API = "https://ran-ai.onrender.com";
 
+// Global state
+let authToken = localStorage.getItem('token');
+let currentUser = null;      // { id, email, name, picture, profile_completed }
 let currentConversationId = null;
-let conversations = [];
-let attachedFiles = [];
-let currentModel = "RanAI 4o";
-let isLoggedIn = false;
-let currentUser = { firstName: '', lastName: '', email: '' };
-let tempEmail = '';
+let conversations  = [];
+let attachedFiles  = [];
+let currentModel   = "RanAI 4o";
 
 /* ════════════════════════════
-   PARTICLE BACKGROUND
+   PARTICLE BACKGROUND (unchanged)
 ════════════════════════════ */
 (function initParticles() {
   const canvas = $('particleCanvas');
@@ -57,26 +59,17 @@ let tempEmail = '';
   window.addEventListener('resize', resize);
 
   function rand(min, max) { return Math.random() * (max - min) + min; }
-
   function makeParticle() {
-    return {
-      x: rand(0, W), y: rand(0, H),
-      vx: rand(-0.18, 0.18), vy: rand(-0.12, 0.12),
-      r: rand(1, 2.2),
-      alpha: rand(0.2, 0.5),
-    };
+    return { x: rand(0,W), y: rand(0,H), vx: rand(-0.18,0.18), vy: rand(-0.12,0.12), r: rand(1,2.2), alpha: rand(0.2,0.5) };
   }
-
   for (let i = 0; i < 90; i++) particles.push(makeParticle());
-
   document.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
 
   function draw() {
     ctx.clearRect(0, 0, W, H);
     for (let i = 0; i < particles.length; i++) {
       for (let j = i + 1; j < particles.length; j++) {
-        const dx = particles[i].x - particles[j].x;
-        const dy = particles[i].y - particles[j].y;
+        const dx = particles[i].x - particles[j].x, dy = particles[i].y - particles[j].y;
         const dist = Math.sqrt(dx*dx + dy*dy);
         if (dist < 110) {
           ctx.beginPath();
@@ -91,10 +84,7 @@ let tempEmail = '';
     particles.forEach(p => {
       const mx = mouse.x - p.x, my = mouse.y - p.y;
       const md = Math.sqrt(mx*mx + my*my);
-      if (md < 140) {
-        p.vx += mx * 0.00015;
-        p.vy += my * 0.00015;
-      }
+      if (md < 140) { p.vx += mx * 0.00015; p.vy += my * 0.00015; }
       const spd = Math.sqrt(p.vx*p.vx + p.vy*p.vy);
       if (spd > 0.5) { p.vx *= 0.5/spd; p.vy *= 0.5/spd; }
       p.x += p.vx; p.y += p.vy;
@@ -111,7 +101,7 @@ let tempEmail = '';
 })();
 
 /* ════════════════════════════
-   TOAST & UTILS
+   TOAST & UTILS (unchanged)
 ════════════════════════════ */
 function showToast(msg, duration = 2200) {
   const existing = document.querySelector('.ranai-toast');
@@ -120,16 +110,14 @@ function showToast(msg, duration = 2200) {
   toast.className = 'ranai-toast';
   toast.innerText = msg;
   toast.style.cssText = `
-    position:fixed; bottom:90px; left:50%; transform:translateX(-50%) translateY(10px);
-    background:rgba(22,24,29,0.95); color:#eef0f4;
-    padding:9px 20px; border-radius:30px; z-index:9999;
-    font-size:13px; font-family:'Sora',sans-serif; font-weight:500;
+    position:fixed;bottom:90px;left:50%;transform:translateX(-50%) translateY(10px);
+    background:rgba(22,24,29,0.95);color:#eef0f4;
+    padding:9px 20px;border-radius:30px;z-index:9999;
+    font-size:13px;font-family:'Sora',sans-serif;font-weight:500;
     border:1px solid rgba(255,255,255,0.1);
     box-shadow:0 6px 24px rgba(0,0,0,0.4);
     backdrop-filter:blur(10px);
-    transition:opacity 0.25s, transform 0.25s;
-    opacity:0;
-  `;
+    transition:opacity 0.25s,transform 0.25s;opacity:0;`;
   document.body.appendChild(toast);
   requestAnimationFrame(() => {
     toast.style.opacity = '1';
@@ -147,13 +135,20 @@ function escapeHtml(str) {
   return str.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
+function renderMarkdown(text) {
+  if (!text) return '';
+  return escapeHtml(text)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
+}
+
 function scrollToBottom() {
   const area = document.querySelector('.chat-scroll-area');
   if (area) area.scrollTo({ top: area.scrollHeight, behavior: 'smooth' });
 }
 
 /* ════════════════════════════
-   MESSAGES
+   MESSAGES (unchanged)
 ════════════════════════════ */
 function addMessage(role, text, saveToConversation = true) {
   const container = elements.chatMessages;
@@ -169,7 +164,8 @@ function addMessage(role, text, saveToConversation = true) {
   if (role === 'ai') {
     avatarUrl = document.querySelector('.brand-img')?.src || 'LOGO.png';
   } else {
-    const letter = (currentUser.firstName || 'U').charAt(0).toUpperCase();
+    const name = currentUser?.name || 'User';
+    const letter = name.charAt(0).toUpperCase();
     avatarUrl = `https://ui-avatars.com/api/?name=${letter}&background=10a37f&color=fff`;
   }
   const avatar = document.createElement('img');
@@ -177,7 +173,7 @@ function addMessage(role, text, saveToConversation = true) {
   avatar.src = avatarUrl;
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble';
-  bubble.textContent = text;
+  bubble.innerHTML = renderMarkdown(text);
   if (role === 'ai') {
     row.appendChild(avatar);
     row.appendChild(bubble);
@@ -201,24 +197,23 @@ function addMessage(role, text, saveToConversation = true) {
 }
 
 function showTyping() { elements.typingIndicator.style.display = 'flex'; scrollToBottom(); }
-function hideTyping() { elements.typingIndicator.style.display = 'none'; }
+function hideTyping()  { elements.typingIndicator.style.display = 'none'; }
 
 /* ════════════════════════════
-   TIME & LANGUAGE
+   TIME & LANGUAGE (unchanged)
 ════════════════════════════ */
 function getCurrentTimeInIndia() {
   const now = new Date();
   const ist = new Date(now.getTime() + 5.5*3600000);
   let h = ist.getUTCHours(), m = ist.getUTCMinutes();
   const ampm = h >= 12 ? 'PM' : 'AM';
-  const dh = h % 12 || 12;
-  return { hours: dh, minutes: String(m).padStart(2,'0'), ampm };
+  return { hours: h % 12 || 12, minutes: String(m).padStart(2,'0'), ampm };
 }
 
 function detectLanguage(text) {
   const t = text.trim();
   if (/[\u0900-\u097F]/.test(t)) return 'hi';
-  if (/(?:namaste|kaise ho|kya haal|kya chal|thik ho|bahut|mujhe|aap|main|kya baat|baj r|kr r|kar rahe|btao|india|ke bare|ke baare|pm|shukriya)/i.test(t)) return 'hi';
+  if (/\b(namaste|kaise ho|kya haal|kya chal|thik ho|bahut|mujhe|aap|main|kya baat|btao|shukriya|nahi|kyun|kab|kahan|kaun|mera|tera|hum|tum|bhai|dost|accha|theek)\b/i.test(t)) return 'hi';
   return 'en';
 }
 
@@ -231,67 +226,41 @@ function getHumanResponse(userMsg, lang) {
       : `It's currently ${hours}:${minutes} ${ampm} in India. 😊 Anything else?`;
   }
   if (/kya kar rahe|kya kr rhe|what are you doing/.test(lower)) {
-    const r = {
-      hi: ["बस आपसे बात कर रहा हूँ! 😊 आप बताइए?", "आपकी मदद के लिए तैयार हूँ। क्या चाहिए?"],
-      en: ["Just chatting with you! 😊 What's on your mind?", "Ready to help! What do you need?"]
-    };
+    const r = { hi: ["बस आपसे बात कर रहा हूँ! 😊", "आपकी मदद के लिए तैयार हूँ।"], en: ["Just chatting with you! 😊", "Ready to help!"] };
     const list = r[lang] || r.en;
     return list[Math.floor(Math.random() * list.length)];
   }
   if (/^(hi|hello|hey|namaste|hlo|hii)/.test(lower)) {
-    const r = {
-      hi: ["नमस्ते! 😊 मेरा नाम RanAi है। कोई सवाल?", "हैलो! मैं RanAI हूँ। कैसे मदद करूँ?"],
-      en: ["Hello! 👋 I'm RanAi. How can I help?", "Hey! 😊 RanAI at your service. Ask anything!"]
-    };
-    const list = r[lang] || r.en;
-    return list[Math.floor(Math.random() * list.length)];
+    const r = { hi: ["नमस्ते! 😊 मैं RanAi हूँ। कोई सवाल?", "हैलो! कैसे मदद करूँ?"], en: ["Hello! 👋 I'm RanAi. How can I help?", "Hey! 😊 Ask me anything!"] };
+    return (r[lang]||r.en)[Math.floor(Math.random() * 2)];
   }
-  if (/how are you|kaise ho|kya haal/.test(lower)) {
-    return lang === 'hi'
-      ? "बिल्कुल ठीक हूँ, शुक्रिया! आप कैसे हैं? 😊"
-      : "Doing great, thanks! 😊 How about you?";
-  }
-  if (/thank|shukriya|धन्यवाद/.test(lower)) {
-    return lang === 'hi' ? "आपका स्वागत है! 😊" : "You're welcome! 😊";
-  }
-  if (/good morning|सुप्रभात/.test(lower)) {
-    return lang === 'hi' ? "सुप्रभात! ☀️ आपका दिन शुभ हो।" : "Good morning! ☀️ Have a great day.";
-  }
-  if (/good night|शुभ रात्रि/.test(lower)) {
-    return lang === 'hi' ? "शुभ रात्रि! 🌙" : "Good night! 🌙";
-  }
-  if (/(what is your name|your name|tumhara naam kya|aapka naam)/i.test(lower)) {
-    return lang === 'hi' ? "मेरा नाम RanAi है।" : "My name is RanAi.";
-  }
-  if (/(who (made|created|built) you|tumko kisne banaya)/i.test(lower)) {
-    return lang === 'hi' ? "मुझे **R@njit** ने बनाया है!" : "I was created by **R@njit**!";
-  }
-  if (/(i love you|love you|main tumse pyar)/i.test(lower)) {
-    return lang === 'hi' ? "ओह! 😊 शुक्रिया, आप भी बहुत प्यारे हो! ❤️" : "Oh! 😊 Thank you, you're lovely too! ❤️";
-  }
-  return lang === 'hi'
-    ? "मैं यहाँ हूँ! 😊 आप बताइए क्या जानना चाहते हैं?"
-    : "I'm here! 😊 Go ahead and ask me anything.";
+  if (/how are you|kaise ho|kya haal/.test(lower)) return lang==='hi' ? "बिल्कुल ठीक हूँ! आप कैसे हैं? 😊" : "Doing great, thanks! 😊";
+  if (/thank|shukriya|धन्यवाद/.test(lower)) return lang==='hi' ? "आपका स्वागत है! 😊" : "You're welcome! 😊";
+  if (/good morning|सुप्रभात/.test(lower)) return lang==='hi' ? "सुप्रभात! ☀️ आपका दिन शुभ हो।" : "Good morning! ☀️ Have a great day.";
+  if (/good night|शुभ रात्रि/.test(lower)) return lang==='hi' ? "शुभ रात्रि! 🌙" : "Good night! 🌙";
+  if (/(what is your name|your name|tumhara naam|aapka naam)/i.test(lower)) return lang==='hi' ? "मेरा नाम RanAi है।" : "My name is RanAi.";
+  if (/(who (made|created|built) you|tumko kisne banaya)/i.test(lower)) return lang==='hi' ? "मुझे **R@njit** ने बनाया है!" : "I was created by **R@njit**!";
+  if (/(i love you|love you|main tumse pyar)/i.test(lower)) return lang==='hi' ? "ओह! 😊 शुक्रिया! ❤️" : "Oh! 😊 Thank you! ❤️";
+  return lang==='hi' ? "मैं यहाँ हूँ! 😊 कुछ भी पूछ सकते हैं।" : "I'm here! 😊 Go ahead and ask me anything.";
 }
 
 /* ════════════════════════════
-   AI & IMAGE
+   AI & IMAGE (unchanged)
 ════════════════════════════ */
 async function sendMessageToAI(question) {
-  const lang = detectLanguage(question);
+  const lang  = detectLanguage(question);
   const lower = question.toLowerCase().trim();
-  const isCasual = /kitna baj|time kya|baj raha|kya kar rahe|kya kr rhe|what are you doing|^(hi|hello|hey|hlo|hii|namaste)|how are you|kaise ho|kya haal|thank|shukriya|good morning|good night|what is your name|your name|who made you|i love you/i.test(lower);
+  const isCasual = /kitna baj|time kya|baj raha|kya kar rahe|^(hi|hello|hey|hlo|hii|namaste)|how are you|kaise ho|thank|shukriya|good morning|good night|what is your name|who made you|i love you/i.test(lower);
   showTyping();
   if (isCasual) {
-    await sleep(600 + Math.random() * 500);
+    await sleep(600 + Math.random() * 400);
     hideTyping();
     addMessage('ai', getHumanResponse(question, lang));
     return;
   }
-  let modifiedQuestion = question;
-  if (lang === 'hi') modifiedQuestion = question + " (कृपया हिंदी में उत्तर दें)";
+  const modifiedQuestion = lang === 'hi' ? question + ' (कृपया हिंदी में उत्तर दें)' : question;
   try {
-    const res = await fetch(`${API}/ask`, {
+    const res  = await fetch(`${API}/ask`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: modifiedQuestion, model: currentModel, lang })
@@ -314,7 +283,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 async function translateText(text, targetLang) {
   if (targetLang !== 'hi') return text;
   try {
-    const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|hi`);
+    const res  = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|hi`);
     const data = await res.json();
     if (data?.responseData?.translatedText) return data.responseData.translatedText;
   } catch {}
@@ -327,7 +296,7 @@ async function sendImageToAI(imageFile, textQuery) {
   formData.append('image', imageFile);
   if (textQuery?.trim()) formData.append('query', textQuery);
   try {
-    const res = await fetch(`${API}/analyze`, { method:'POST', body: formData });
+    const res  = await fetch(`${API}/analyze`, { method: 'POST', body: formData });
     const data = await res.json();
     hideTyping();
     if (data.success) {
@@ -345,10 +314,10 @@ async function sendImageToAI(imageFile, textQuery) {
 }
 
 /* ════════════════════════════
-   SEND HANDLER
+   SEND HANDLER (unchanged)
 ════════════════════════════ */
 async function handleSend() {
-  const msg = elements.msgTextarea.value.trim();
+  const msg       = elements.msgTextarea.value.trim();
   const hasImages = attachedFiles.some(f => f.type.startsWith('image/'));
   const hasOther  = attachedFiles.some(f => !f.type.startsWith('image/'));
   if (hasOther) showToast('Only image files can be analyzed. Others ignored.', 3000);
@@ -368,7 +337,7 @@ async function handleSend() {
 function autoResizeTextarea() {
   const ta = elements.msgTextarea;
   ta.style.height = 'auto';
-  ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
+  ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
   elements.sendBtn.disabled = ta.value.trim() === '';
 }
 
@@ -389,7 +358,7 @@ function renderAttachments() {
 }
 
 /* ════════════════════════════
-   CONVERSATIONS
+   CONVERSATIONS (unchanged)
 ════════════════════════════ */
 function saveConversationsToSession() {
   sessionStorage.setItem('ranai_conversations', JSON.stringify(conversations));
@@ -453,16 +422,16 @@ function deleteConversation(id) {
 }
 
 function renderConversationList() {
-  const term = elements.searchConv.value.toLowerCase();
+  const term     = elements.searchConv?.value.toLowerCase() || '';
   const filtered = conversations.filter(c => c.title.toLowerCase().includes(term));
-  const today = new Date().toDateString();
-  const yest  = new Date(Date.now() - 86400000).toDateString();
-  const groups = { Today:[], Yesterday:[], Older:[] };
+  const today    = new Date().toDateString();
+  const yest     = new Date(Date.now() - 86400000).toDateString();
+  const groups   = { Today: [], Yesterday: [], Older: [] };
   filtered.forEach(conv => {
     const d = new Date(conv.createdAt).toDateString();
-    if (d === today)   groups.Today.push(conv);
-    else if (d===yest) groups.Yesterday.push(conv);
-    else               groups.Older.push(conv);
+    if (d === today) groups.Today.push(conv);
+    else if (d === yest) groups.Yesterday.push(conv);
+    else groups.Older.push(conv);
   });
   let html = '';
   for (const [label, convs] of Object.entries(groups)) {
@@ -472,7 +441,10 @@ function renderConversationList() {
       html += `<div class="conv-item ${conv.id===currentConversationId?'active':''}" data-id="${conv.id}">
         <span class="conv-title">${escapeHtml(conv.title)}</span>
         <button class="conv-delete" data-id="${conv.id}" title="Delete">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+            <path d="M10 11v6M14 11v6"/>
+          </svg>
         </button>
       </div>`;
     });
@@ -483,7 +455,7 @@ function renderConversationList() {
 
 function initConversationEvents() {
   elements.convList.addEventListener('click', e => {
-    const del = e.target.closest('.conv-delete');
+    const del  = e.target.closest('.conv-delete');
     if (del) { e.stopPropagation(); deleteConversation(del.dataset.id); return; }
     const item = e.target.closest('.conv-item');
     if (item && item.dataset.id !== currentConversationId) {
@@ -497,7 +469,7 @@ function initConversationEvents() {
 }
 
 /* ════════════════════════════
-   SIDEBAR, MODEL, USER MENU
+   SIDEBAR, MODEL, USER MENU (unchanged)
 ════════════════════════════ */
 function closeSidebarMobile() {
   elements.sidebar.classList.remove('mobile-open');
@@ -510,7 +482,7 @@ function initSidebar() {
   const isMobile = () => window.innerWidth <= 768;
   function initState() {
     if (!isMobile()) sidebar.classList.add('collapsed');
-    else { sidebar.classList.remove('mobile-open','collapsed'); }
+    else sidebar.classList.remove('mobile-open', 'collapsed');
   }
   function toggle() {
     if (isMobile()) {
@@ -540,7 +512,7 @@ function initSidebar() {
 function initModelDropdown() {
   elements.modelPill.addEventListener('click', e => {
     e.stopPropagation();
-    const dd = elements.modelDropdown;
+    const dd   = elements.modelDropdown;
     const rect = elements.modelPill.getBoundingClientRect();
     dd.style.top  = (rect.bottom + 8) + 'px';
     dd.style.left = rect.left + 'px';
@@ -560,7 +532,7 @@ function initModelDropdown() {
     });
   });
   document.addEventListener('click', e => {
-    if (!elements.modelDropdown.contains(e.target) && e.target !== elements.modelPill && !elements.modelPill.contains(e.target))
+    if (!elements.modelDropdown.contains(e.target) && !elements.modelPill.contains(e.target))
       elements.modelDropdown.classList.remove('open');
   });
 }
@@ -572,52 +544,43 @@ function initUserMenu() {
     if (!near) return;
     const rect = near.getBoundingClientRect();
     ud.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
-    ud.style.left = rect.left + 'px';
-    ud.style.top = 'auto';
+    ud.style.left   = rect.left + 'px';
+    ud.style.top    = 'auto';
     ud.classList.toggle('open');
   }
   if (userMenuBtn) userMenuBtn.addEventListener('click', e => { e.stopPropagation(); openUserDropdown(elements.userRow); });
   elements.topbarAvatar?.addEventListener('click', e => { e.stopPropagation(); openUserDropdown(elements.topbarAvatar); });
-  document.addEventListener('click', e => {
-    if (!ud.contains(e.target)) ud.classList.remove('open');
-  });
-  $('profileMenuItem')?.addEventListener('click', () => { ud.classList.remove('open'); openProfile(); });
+  document.addEventListener('click', e => { if (!ud.contains(e.target)) ud.classList.remove('open'); });
+  $('profileMenuItem')?.addEventListener('click',  () => { ud.classList.remove('open'); openProfile(); });
   $('settingsMenuItem')?.addEventListener('click', () => { ud.classList.remove('open'); showToast('Settings coming soon!'); });
-  $('upgradeMenuItem')?.addEventListener('click', () => { ud.classList.remove('open'); showToast('Upgrade plans coming soon! ⭐'); });
-  $('logoutMenuItem')?.addEventListener('click', () => {
-    sessionStorage.clear();
-    localStorage.removeItem('ranai_user');
-    window.location.reload(); // This will show the login modal again
-  });
+  $('upgradeMenuItem')?.addEventListener('click',  () => { ud.classList.remove('open'); showToast('Upgrade plans coming soon! ⭐'); });
+  $('logoutMenuItem')?.addEventListener('click',   () => { logout(); });
   $('upgradeBtn')?.addEventListener('click', () => showToast('Upgrade plans coming soon! ⭐'));
 }
 
 /* ════════════════════════════
-   PROFILE
+   PROFILE (updated to show email)
 ════════════════════════════ */
 function openProfile() {
-  if (!currentUser.firstName) return;
-  $('profileName').innerText = `${currentUser.firstName} ${currentUser.lastName}`;
-  $('profileEmail').innerText = currentUser.email;
-  $('profileAvatar').src = `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser.firstName)}&background=10a37f&color=fff&size=128`;
+  if (!currentUser) return;
+  $('profileName').innerText   = currentUser.name || 'User';
+  $('profileEmail').innerText  = currentUser.email || '';
+  $('profileAvatar').src       = currentUser.picture || `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser.name || 'User')}&background=10a37f&color=fff&size=128`;
   const statEl = $('statChats');
   if (statEl) statEl.innerText = conversations.filter(c=>c.messages.length).length;
   elements.profileModal.style.display = 'flex';
 }
-
-function closeProfile() {
-  elements.profileModal.style.display = 'none';
-}
+function closeProfile() { elements.profileModal.style.display = 'none'; }
 
 /* ════════════════════════════
-   SUGGESTIONS
+   SUGGESTIONS (unchanged)
 ════════════════════════════ */
 function loadSuggestions() {
   const suggestions = [
     { icon: '🧠', main: "Explain quantum computing", sub: "in simple terms" },
-    { icon: '💻', main: "Write a Python script", sub: "to scrape a website" },
-    { icon: '💪', main: "Create a workout plan", sub: "for beginners" },
-    { icon: '📄', main: "Summarize this article", sub: "paste a URL or text" },
+    { icon: '💻', main: "Write a Python script",     sub: "to scrape a website" },
+    { icon: '💪', main: "Create a workout plan",     sub: "for beginners" },
+    { icon: '📄', main: "Summarize this article",    sub: "paste a URL or text" },
   ];
   const grid = $('suggestionGrid');
   if (!grid) return;
@@ -637,7 +600,7 @@ function loadSuggestions() {
 }
 
 /* ════════════════════════════
-   ATTACHMENTS & TOOL BUTTONS
+   ATTACHMENTS & TOOL BUTTONS (unchanged)
 ════════════════════════════ */
 function initAttachments() {
   const fileInput = document.createElement('input');
@@ -669,190 +632,147 @@ function initToolBtns() {
 }
 
 /* ════════════════════════════
-   AUTH – SIGNUP (OTP via email)
+   AUTH – GOOGLE SIGN‑IN & NAME COLLECTION
 ════════════════════════════ */
-async function sendOtp() {
-  const email = $('signupEmail').value.trim();
-  if (!email) return showToast('Please enter your email');
-  const btn = $('sendOtpBtn');
-  btn.style.opacity = '0.7';
-  const msgDiv = $('otpMessage');
-  msgDiv.style.color = 'var(--text-3)'; msgDiv.innerText = 'Sending…';
-  try {
-    const res = await fetch(`${API}/send-otp`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email}) });
-    const data = await res.json();
-    msgDiv.style.color = '#22c55e'; msgDiv.innerText = data.message || 'OTP sent!';
-  } catch {
-    msgDiv.style.color = '#ff6b6b'; msgDiv.innerText = 'Failed to send OTP. Check backend.';
-  }
-  btn.style.opacity = '1';
+function showAuthModal() {
+  elements.authModal.style.display = 'flex';
+  elements.nameModal.style.display = 'none';
+  elements.main.style.display = 'none';
 }
 
-async function verifyOtp() {
-  const email = $('signupEmail').value.trim();
-  const otp = $('otp').value.trim();
-  if (!email || !otp) return showToast('Enter email and OTP');
-  const msgDiv = $('otpMessage');
-  msgDiv.style.color = 'var(--text-3)'; msgDiv.innerText = 'Verifying…';
-  try {
-    const res = await fetch(`${API}/verify-otp`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email,otp}) });
-    const data = await res.json();
-    if (data.success) {
-      msgDiv.style.color = '#22c55e'; msgDiv.innerText = 'Verified! Set your password and name.';
-      tempEmail = email;
-      const s1 = $('signupStep1'), s2 = $('signupStep2');
-      s1.style.transition = 'opacity 0.25s, transform 0.25s';
-      s1.style.opacity = '0'; s1.style.transform = 'translateX(-20px)';
-      setTimeout(() => {
-        s1.style.display = 'none';
-        s2.style.display = 'block';
-        s2.style.opacity = '0'; s2.style.transform = 'translateX(20px)';
-        requestAnimationFrame(() => {
-          s2.style.transition = 'opacity 0.25s, transform 0.25s';
-          s2.style.opacity = '1'; s2.style.transform = 'none';
-        });
-      }, 260);
-    } else {
-      msgDiv.style.color = '#ff6b6b'; msgDiv.innerText = data.message || 'Verification failed';
-    }
-  } catch {
-    msgDiv.style.color = '#ff6b6b'; msgDiv.innerText = 'Error during verification.';
-  }
+function showNameModal() {
+  elements.authModal.style.display = 'none';
+  elements.nameModal.style.display = 'flex';
+  elements.main.style.display = 'none';
+  $('userDisplayName').value = '';
+  $('nameError').innerText = '';
 }
 
-async function signup() {
-  const password  = $('password').value;
-  const firstName = $('firstName').value.trim();
-  const lastName  = $('lastName').value.trim();
-  if (!password || !firstName || !lastName) return showToast('Please fill all fields');
-  const btn = $('signupBtn'); btn.style.opacity = '0.7';
-  try {
-    const res = await fetch(`${API}/signup`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:tempEmail, password, firstName, lastName}) });
-    const data = await res.json();
-    if (data.success) {
-      currentUser = {firstName, lastName, email:tempEmail};
-      sessionStorage.setItem('ranai_user', JSON.stringify(currentUser));
-      isLoggedIn = true;
-      const box = document.querySelector('.signup-box');
-      box.style.transition = 'opacity 0.3s, transform 0.3s';
-      box.style.opacity = '0'; box.style.transform = 'scale(0.9)';
-      setTimeout(() => {
-        elements.signupModal.style.display = 'none';
-        elements.main.style.display = 'grid';
-        updateUserUI();
-        conversations = [];
-        newConversation();
-        loadSuggestions();
-        showToast(`Welcome, ${firstName}! 🎉`);
-      }, 320);
-    } else {
-      showToast(data.message || 'Signup failed');
-    }
-  } catch {
-    showToast('Signup error. Check backend connection.');
-  }
-  btn.style.opacity = '1';
+function showMainApp() {
+  elements.authModal.style.display = 'none';
+  elements.nameModal.style.display = 'none';
+  elements.main.style.display = 'flex';
+  // Update UI with user info
+  updateUserUI();
+  // Load conversations from session or start fresh
+  conversations = [];
+  loadConversationsFromSession();
+  loadSuggestions();
 }
 
-/* ════════════════════════════
-   LOGIN
-════════════════════════════ */
-async function doLogin() {
-  const email = $('loginEmail').value.trim();
-  const password = $('loginPassword').value;
-  if (!email || !password) {
-    showToast('Please enter email and password');
-    return;
-  }
-  const btn = $('doLoginBtn');
-  btn.style.opacity = '0.7';
-  const msgDiv = $('loginMessage');
-  msgDiv.innerText = 'Logging in...';
+async function verifyToken(token) {
   try {
-    const res = await fetch(`${API}/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+    const res = await fetch(`${API}/auth/me`, {
+      headers: { 'Authorization': `Bearer ${token}` }
     });
     const data = await res.json();
     if (data.success) {
       currentUser = data.user;
-      sessionStorage.setItem('ranai_user', JSON.stringify(currentUser));
-      isLoggedIn = true;
-      const box = document.querySelector('.signup-box');
-      box.style.transition = 'opacity 0.3s, transform 0.3s';
-      box.style.opacity = '0'; box.style.transform = 'scale(0.9)';
-      setTimeout(() => {
-        elements.signupModal.style.display = 'none';
-        elements.main.style.display = 'grid';
-        updateUserUI();
-        conversations = [];
-        newConversation();
-        loadSuggestions();
-        showToast(`Welcome back, ${currentUser.firstName}! 🎉`);
-      }, 320);
+      authToken = token;
+      localStorage.setItem('token', token);
+      if (!currentUser.profile_completed) {
+        showNameModal();
+      } else {
+        showMainApp();
+      }
     } else {
-      msgDiv.innerText = data.message || 'Login failed';
-      msgDiv.style.color = '#ff6b6b';
-      showToast(data.message || 'Login failed');
+      throw new Error('Invalid token');
     }
   } catch (err) {
-    msgDiv.innerText = 'Network error. Check backend.';
-    msgDiv.style.color = '#ff6b6b';
-    console.error(err);
+    console.error('Token verification failed', err);
+    localStorage.removeItem('token');
+    authToken = null;
+    showAuthModal();
   }
-  btn.style.opacity = '1';
+}
+
+async function completeProfile(name) {
+  try {
+    const res = await fetch(`${API}/complete-profile`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`
+      },
+      body: JSON.stringify({ name })
+    });
+    const data = await res.json();
+    if (data.success) {
+      // Update stored token and user
+      authToken = data.token;
+      localStorage.setItem('token', authToken);
+      currentUser = { ...currentUser, name: data.user.name, profile_completed: true };
+      showMainApp();
+    } else {
+      $('nameError').innerText = data.message || 'Failed to save name';
+    }
+  } catch (err) {
+    console.error(err);
+    $('nameError').innerText = 'Server error. Please try again.';
+  }
+}
+
+function logout() {
+  localStorage.removeItem('token');
+  authToken = null;
+  currentUser = null;
+  fetch(`${API}/logout`, { method: 'POST' }).finally(() => {
+    window.location.href = '/';
+  });
+}
+
+function initAuth() {
+  // Check URL for token after Google callback
+  const urlParams = new URLSearchParams(window.location.search);
+  const tokenFromUrl = urlParams.get('token');
+  if (tokenFromUrl) {
+    localStorage.setItem('token', tokenFromUrl);
+    authToken = tokenFromUrl;
+    window.history.replaceState({}, document.title, '/');
+    verifyToken(authToken);
+    return;
+  }
+
+  // Check stored token
+  if (authToken) {
+    verifyToken(authToken);
+  } else {
+    showAuthModal();
+  }
+
+  // Google Sign‑In button
+  $('googleSignInBtn')?.addEventListener('click', () => {
+    window.location.href = `${API}/auth/google`;
+  });
+
+  // Name submission
+  $('submitNameBtn')?.addEventListener('click', () => {
+    const name = $('userDisplayName').value.trim();
+    if (!name) {
+      $('nameError').innerText = 'Please enter your name';
+      return;
+    }
+    completeProfile(name);
+  });
 }
 
 /* ════════════════════════════
-   TAB SWITCHING (Signup / Login)
+   UPDATE USER UI (avatar, name)
 ════════════════════════════ */
-function initAuthTabs() {
-  const tabSignup = $('tabSignupBtn');
-  const tabLogin = $('tabLoginBtn');
-  const signupForm = $('signupForm');
-  const loginForm = $('loginForm');
-
-  if (!tabSignup || !tabLogin) return;
-
-  tabSignup.addEventListener('click', () => {
-    tabSignup.classList.add('active');
-    tabLogin.classList.remove('active');
-    signupForm.style.display = 'block';
-    loginForm.style.display = 'none';
-    // reset signup steps
-    const step1 = $('signupStep1');
-    const step2 = $('signupStep2');
-    if (step1) step1.style.display = 'block';
-    if (step2) step2.style.display = 'none';
-    const otpMsg = $('otpMessage');
-    if (otpMsg) otpMsg.innerText = '';
-  });
-  tabLogin.addEventListener('click', () => {
-    tabLogin.classList.add('active');
-    tabSignup.classList.remove('active');
-    signupForm.style.display = 'none';
-    loginForm.style.display = 'block';
-    const loginMsg = $('loginMessage');
-    if (loginMsg) loginMsg.innerText = '';
-  });
-  // Initially show signup
-  signupForm.style.display = 'block';
-  loginForm.style.display = 'none';
-}
-
 function updateUserUI() {
-  const name = `${currentUser.firstName} ${currentUser.lastName}`;
-  document.querySelectorAll('.user-name').forEach(el => el.innerText = name);
-  document.querySelectorAll('.user-dd-name').forEach(el => el.innerText = name);
-  document.querySelectorAll('.user-dd-email').forEach(el => el.innerText = currentUser.email);
-  const url = `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser.firstName)}&background=10a37f&color=fff`;
-  document.querySelectorAll('.user-avatar').forEach(img => img.src = url);
-  document.querySelectorAll('.topbar-avatar img, .user-dd-avatar').forEach(img => { if(img.tagName==='IMG') img.src = url; });
+  if (!currentUser) return;
+  const displayName = currentUser.name || 'User';
+  document.querySelectorAll('.user-name').forEach(el => el.innerText = displayName);
+  document.querySelectorAll('.user-dd-name').forEach(el => el.innerText = displayName);
+  document.querySelectorAll('.user-dd-email').forEach(el => el.innerText = currentUser.email || '');
+  const avatarUrl = currentUser.picture || `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=10a37f&color=fff`;
+  document.querySelectorAll('.user-avatar, .topbar-avatar img, .user-dd-avatar').forEach(img => {
+    if (img.tagName === 'IMG') img.src = avatarUrl;
+  });
 }
 
 /* ════════════════════════════
-   EVENT LISTENERS
+   EVENT LISTENERS (updated)
 ════════════════════════════ */
 function initEventListeners() {
   elements.sendBtn?.addEventListener('click', handleSend);
@@ -865,68 +785,14 @@ function initEventListeners() {
   $('closeProfileBtn')?.addEventListener('click', closeProfile);
   elements.profileModal?.addEventListener('click', e => { if (e.target === elements.profileModal) closeProfile(); });
 
-  // Signup events
-  $('sendOtpBtn')?.addEventListener('click', sendOtp);
-  $('verifyOtpBtn')?.addEventListener('click', verifyOtp);
-  $('signupBtn')?.addEventListener('click', signup);
-  $('otp')?.addEventListener('keydown', e => { if (e.key==='Enter') verifyOtp(); });
-  $('signupEmail')?.addEventListener('keydown', e => { if (e.key==='Enter') sendOtp(); });
-
-  // Login event
-  $('doLoginBtn')?.addEventListener('click', doLogin);
-  $('loginPassword')?.addEventListener('keydown', e => { if (e.key==='Enter') doLogin(); });
-
   elements.newChatBtn?.addEventListener('click', () => newConversation());
 }
 
 /* ════════════════════════════
-   PASSWORD TOGGLE
-════════════════════════════ */
-function initPasswordToggle() {
-  $('togglePass')?.addEventListener('click', () => {
-    const inp = $('password');
-    inp.type = inp.type === 'password' ? 'text' : 'password';
-  });
-}
-
-/* ════════════════════════════
-   INIT – Main entry point
+   INIT
 ════════════════════════════ */
 window.onload = () => {
-  // 1. Ensure modal is visible and main hidden initially
-  elements.signupModal.style.display = 'flex';
-  elements.main.style.display = 'none';
-
-  // 2. Check if user is already logged in (session)
-  const savedUser = sessionStorage.getItem('ranai_user');
-  if (savedUser) {
-    currentUser = JSON.parse(savedUser);
-    isLoggedIn = true;
-    // If logged in, hide modal and show main
-    elements.signupModal.style.display = 'none';
-    elements.main.style.display = 'grid';
-    updateUserUI();
-    conversations = [];
-    newConversation();
-    loadSuggestions();
-  } else {
-    // Not logged in – show modal and reset its state
-    elements.signupModal.style.display = 'flex';
-    elements.main.style.display = 'none';
-    // Reset signup form to step 1
-    const step1 = $('signupStep1');
-    const step2 = $('signupStep2');
-    if (step1) step1.style.display = 'block';
-    if (step2) step2.style.display = 'none';
-    const otpMsg = $('otpMessage');
-    if (otpMsg) otpMsg.innerText = '';
-    const loginMsg = $('loginMessage');
-    if (loginMsg) loginMsg.innerText = '';
-    // Make sure signup tab is active
-    initAuthTabs();
-  }
-
-  // Initialize all UI components
+  initAuth();          // handles Google OAuth, token, name modal
   initSidebar();
   initModelDropdown();
   initUserMenu();
@@ -934,5 +800,4 @@ window.onload = () => {
   initToolBtns();
   initEventListeners();
   initConversationEvents();
-  initPasswordToggle();
 };
