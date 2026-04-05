@@ -6,7 +6,6 @@
 
 const $ = (id) => document.getElementById(id);
 
-
 const elements = {
   sidebar:           $('sidebar'),
   sidebarToggle:     $('sidebarToggle'),
