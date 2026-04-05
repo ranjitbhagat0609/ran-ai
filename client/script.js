@@ -1,7 +1,7 @@
 'use strict';
 
 /* ════════════════════════════════════════════════════
-   RanAI – Google Sign‑In Only (No OTP)
+   RanAI – Guest Mode (No Login Required)
 ════════════════════════════════════════════════════ */
 
 const $ = (id) => document.getElementById(id);
@@ -12,8 +12,6 @@ const elements = {
   sidebarOverlay:    $('sidebarOverlay'),
   newChatBtn:        $('newChatBtn'),
   main:              $('main'),
-  authModal:         $('authModal'),
-  nameModal:         $('nameModal'),
   msgTextarea:       $('msgTextarea'),
   sendBtn:           $('sendBtn'),
   chatMessages:      $('chatMessages'),
@@ -24,7 +22,6 @@ const elements = {
   userRow:           $('userRow'),
   userDropdown:      $('userDropdown'),
   topbarAvatar:      $('topbarAvatar'),
-  profileModal:      $('profileModal'),
   convList:          $('convList'),
   searchConv:        $('searchConv'),
   attachBtn:         $('attachBtn'),
@@ -35,15 +32,14 @@ const elements = {
 const API = "https://ran-ai.onrender.com";
 
 // Global state
-let authToken = localStorage.getItem('token');
-let currentUser = null;      // { id, email, name, picture, profile_completed }
+let currentUser = { name: "Guest", email: "guest@example.com", picture: null, id: "guest" };
 let currentConversationId = null;
 let conversations  = [];
 let attachedFiles  = [];
 let currentModel   = "RanAI 4o";
 
 /* ════════════════════════════
-   PARTICLE BACKGROUND (unchanged)
+   PARTICLE BACKGROUND
 ════════════════════════════ */
 (function initParticles() {
   const canvas = $('particleCanvas');
@@ -101,7 +97,7 @@ let currentModel   = "RanAI 4o";
 })();
 
 /* ════════════════════════════
-   TOAST & UTILS (unchanged)
+   TOAST & UTILS
 ════════════════════════════ */
 function showToast(msg, duration = 2200) {
   const existing = document.querySelector('.ranai-toast');
@@ -148,7 +144,7 @@ function scrollToBottom() {
 }
 
 /* ════════════════════════════
-   MESSAGES (unchanged)
+   MESSAGES
 ════════════════════════════ */
 function addMessage(role, text, saveToConversation = true) {
   const container = elements.chatMessages;
@@ -164,7 +160,7 @@ function addMessage(role, text, saveToConversation = true) {
   if (role === 'ai') {
     avatarUrl = document.querySelector('.brand-img')?.src || 'LOGO.png';
   } else {
-    const name = currentUser?.name || 'User';
+    const name = currentUser?.name || 'Guest';
     const letter = name.charAt(0).toUpperCase();
     avatarUrl = `https://ui-avatars.com/api/?name=${letter}&background=10a37f&color=fff`;
   }
@@ -200,7 +196,7 @@ function showTyping() { elements.typingIndicator.style.display = 'flex'; scrollT
 function hideTyping()  { elements.typingIndicator.style.display = 'none'; }
 
 /* ════════════════════════════
-   TIME & LANGUAGE (unchanged)
+   TIME & LANGUAGE
 ════════════════════════════ */
 function getCurrentTimeInIndia() {
   const now = new Date();
@@ -245,7 +241,7 @@ function getHumanResponse(userMsg, lang) {
 }
 
 /* ════════════════════════════
-   AI & IMAGE (unchanged)
+   AI & IMAGE
 ════════════════════════════ */
 async function sendMessageToAI(question) {
   const lang  = detectLanguage(question);
@@ -314,7 +310,7 @@ async function sendImageToAI(imageFile, textQuery) {
 }
 
 /* ════════════════════════════
-   SEND HANDLER (unchanged)
+   SEND HANDLER
 ════════════════════════════ */
 async function handleSend() {
   const msg       = elements.msgTextarea.value.trim();
@@ -358,7 +354,7 @@ function renderAttachments() {
 }
 
 /* ════════════════════════════
-   CONVERSATIONS (unchanged)
+   CONVERSATIONS
 ════════════════════════════ */
 function saveConversationsToSession() {
   sessionStorage.setItem('ranai_conversations', JSON.stringify(conversations));
@@ -469,7 +465,7 @@ function initConversationEvents() {
 }
 
 /* ════════════════════════════
-   SIDEBAR, MODEL, USER MENU (unchanged)
+   SIDEBAR, MODEL, USER MENU
 ════════════════════════════ */
 function closeSidebarMobile() {
   elements.sidebar.classList.remove('mobile-open');
@@ -554,18 +550,17 @@ function initUserMenu() {
   $('profileMenuItem')?.addEventListener('click',  () => { ud.classList.remove('open'); openProfile(); });
   $('settingsMenuItem')?.addEventListener('click', () => { ud.classList.remove('open'); showToast('Settings coming soon!'); });
   $('upgradeMenuItem')?.addEventListener('click',  () => { ud.classList.remove('open'); showToast('Upgrade plans coming soon! ⭐'); });
-  $('logoutMenuItem')?.addEventListener('click',   () => { logout(); });
   $('upgradeBtn')?.addEventListener('click', () => showToast('Upgrade plans coming soon! ⭐'));
 }
 
 /* ════════════════════════════
-   PROFILE (updated to show email)
+   PROFILE (guest version)
 ════════════════════════════ */
 function openProfile() {
   if (!currentUser) return;
-  $('profileName').innerText   = currentUser.name || 'User';
-  $('profileEmail').innerText  = currentUser.email || '';
-  $('profileAvatar').src       = currentUser.picture || `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser.name || 'User')}&background=10a37f&color=fff&size=128`;
+  $('profileName').innerText   = currentUser.name || 'Guest';
+  $('profileEmail').innerText  = currentUser.email || 'guest@example.com';
+  $('profileAvatar').src       = currentUser.picture || `https://ui-avatars.com/api/?name=Guest&background=10a37f&color=fff&size=128`;
   const statEl = $('statChats');
   if (statEl) statEl.innerText = conversations.filter(c=>c.messages.length).length;
   elements.profileModal.style.display = 'flex';
@@ -573,7 +568,7 @@ function openProfile() {
 function closeProfile() { elements.profileModal.style.display = 'none'; }
 
 /* ════════════════════════════
-   SUGGESTIONS (unchanged)
+   SUGGESTIONS
 ════════════════════════════ */
 function loadSuggestions() {
   const suggestions = [
@@ -600,7 +595,7 @@ function loadSuggestions() {
 }
 
 /* ════════════════════════════
-   ATTACHMENTS & TOOL BUTTONS (unchanged)
+   ATTACHMENTS & TOOL BUTTONS
 ════════════════════════════ */
 function initAttachments() {
   const fileInput = document.createElement('input');
@@ -632,139 +627,14 @@ function initToolBtns() {
 }
 
 /* ════════════════════════════
-   AUTH – GOOGLE SIGN‑IN & NAME COLLECTION
-════════════════════════════ */
-function showAuthModal() {
-  elements.authModal.style.display = 'flex';
-  elements.nameModal.style.display = 'none';
-  elements.main.style.display = 'none';
-}
-
-function showNameModal() {
-  elements.authModal.style.display = 'none';
-  elements.nameModal.style.display = 'flex';
-  elements.main.style.display = 'none';
-  $('userDisplayName').value = '';
-  $('nameError').innerText = '';
-}
-
-function showMainApp() {
-  elements.authModal.style.display = 'none';
-  elements.nameModal.style.display = 'none';
-  elements.main.style.display = 'flex';
-  // Update UI with user info
-  updateUserUI();
-  // Load conversations from session or start fresh
-  conversations = [];
-  loadConversationsFromSession();
-  loadSuggestions();
-}
-
-async function verifyToken(token) {
-  try {
-    const res = await fetch(`${API}/auth/me`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    const data = await res.json();
-    if (data.success) {
-      currentUser = data.user;
-      authToken = token;
-      localStorage.setItem('token', token);
-      if (!currentUser.profile_completed) {
-        showNameModal();
-      } else {
-        showMainApp();
-      }
-    } else {
-      throw new Error('Invalid token');
-    }
-  } catch (err) {
-    console.error('Token verification failed', err);
-    localStorage.removeItem('token');
-    authToken = null;
-    showAuthModal();
-  }
-}
-
-async function completeProfile(name) {
-  try {
-    const res = await fetch(`${API}/complete-profile`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authToken}`
-      },
-      body: JSON.stringify({ name })
-    });
-    const data = await res.json();
-    if (data.success) {
-      // Update stored token and user
-      authToken = data.token;
-      localStorage.setItem('token', authToken);
-      currentUser = { ...currentUser, name: data.user.name, profile_completed: true };
-      showMainApp();
-    } else {
-      $('nameError').innerText = data.message || 'Failed to save name';
-    }
-  } catch (err) {
-    console.error(err);
-    $('nameError').innerText = 'Server error. Please try again.';
-  }
-}
-
-function logout() {
-  localStorage.removeItem('token');
-  authToken = null;
-  currentUser = null;
-  fetch(`${API}/logout`, { method: 'POST' }).finally(() => {
-    window.location.href = '/';
-  });
-}
-
-function initAuth() {
-  // Check URL for token after Google callback
-  const urlParams = new URLSearchParams(window.location.search);
-  const tokenFromUrl = urlParams.get('token');
-  if (tokenFromUrl) {
-    localStorage.setItem('token', tokenFromUrl);
-    authToken = tokenFromUrl;
-    window.history.replaceState({}, document.title, '/');
-    verifyToken(authToken);
-    return;
-  }
-
-  // Check stored token
-  if (authToken) {
-    verifyToken(authToken);
-  } else {
-    showAuthModal();
-  }
-
-  // Google Sign‑In button
-  $('googleSignInBtn')?.addEventListener('click', () => {
-    window.location.href = `${API}/auth/google`;
-  });
-
-  // Name submission
-  $('submitNameBtn')?.addEventListener('click', () => {
-    const name = $('userDisplayName').value.trim();
-    if (!name) {
-      $('nameError').innerText = 'Please enter your name';
-      return;
-    }
-    completeProfile(name);
-  });
-}
-
-/* ════════════════════════════
-   UPDATE USER UI (avatar, name)
+   UPDATE USER UI
 ════════════════════════════ */
 function updateUserUI() {
   if (!currentUser) return;
-  const displayName = currentUser.name || 'User';
+  const displayName = currentUser.name || 'Guest';
   document.querySelectorAll('.user-name').forEach(el => el.innerText = displayName);
   document.querySelectorAll('.user-dd-name').forEach(el => el.innerText = displayName);
-  document.querySelectorAll('.user-dd-email').forEach(el => el.innerText = currentUser.email || '');
+  document.querySelectorAll('.user-dd-email').forEach(el => el.innerText = currentUser.email || 'guest@example.com');
   const avatarUrl = currentUser.picture || `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=10a37f&color=fff`;
   document.querySelectorAll('.user-avatar, .topbar-avatar img, .user-dd-avatar').forEach(img => {
     if (img.tagName === 'IMG') img.src = avatarUrl;
@@ -772,7 +642,7 @@ function updateUserUI() {
 }
 
 /* ════════════════════════════
-   EVENT LISTENERS (updated)
+   EVENT LISTENERS
 ════════════════════════════ */
 function initEventListeners() {
   elements.sendBtn?.addEventListener('click', handleSend);
@@ -789,10 +659,16 @@ function initEventListeners() {
 }
 
 /* ════════════════════════════
-   INIT
+   INIT (Guest Mode – No Login)
 ════════════════════════════ */
 window.onload = () => {
-  initAuth();          // handles Google OAuth, token, name modal
+  // Directly show main app as guest
+  elements.main.style.display = 'flex';
+  updateUserUI();
+  loadConversationsFromSession();
+  loadSuggestions();
+  
+  // Initialize UI components
   initSidebar();
   initModelDropdown();
   initUserMenu();
