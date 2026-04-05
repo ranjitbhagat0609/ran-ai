@@ -9,6 +9,6 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // Database connection string (पासवर्ड पहले बदल चुके हैं न?)
 // पुराना पासवर्ड expose हो गया था – नया डालें
-const sql = postgres('postgresql://postgres:Rk060920039801088930@db.cnneiwpcbahbfojxeplq.supabase.co:5432/postgres?family=4');
+const sql = postgres('postgresql://ranai:Rk060920039801088930@db.cnneiwpcbahbfojxeplq.supabase.co:5432/postgres?family=4');
 
 module.exports = { supabase, sql };
