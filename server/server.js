@@ -11,6 +11,60 @@ const { tavily } = require("@tavily/core");
 const app = express();
 app.use(cors());
 app.use(express.json());
+// 🔥 RanAI Smart Data
+const data = [
+  { q: ["good morning", "gm", "gud mrng"], a: "Good morning 😊" },
+  { q: ["bad mood", "mood off", "sad"], a: "Thoda rest lo, sab thik ho jayega." },
+  { q: ["welcome", "wlcm"], a: "Thank you 😊" },
+  { q: ["aaj barish hogi", "rain today"], a: "Kis location ka weather check karna hai?" },
+  { q: ["iran war update"], a: "Kis date ka update chahiye?" }
+];
+
+
+// 🔥 Clean text
+function cleanText(text) {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+
+// 🔥 Match score
+function matchScore(input, questions) {
+  let score = 0;
+
+  for (let q of questions) {
+    q = cleanText(q);
+
+    if (input.includes(q)) {
+      score += q.length;
+    }
+  }
+
+  return score;
+}
+
+
+// 🔥 Find best answer
+function findBestAnswer(userInput) {
+  let input = cleanText(userInput);
+
+  let bestScore = 0;
+  let bestAnswer = "Samajh nahi aaya 😅 thoda aur clear bolo";
+
+  for (let item of data) {
+    let score = matchScore(input, item.q);
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestAnswer = item.a;
+    }
+  }
+
+  return bestAnswer;
+}
 app.use(express.static(path.join(__dirname, "../client")));
 
 // Session setup for human-like conversation memory
@@ -22,11 +76,25 @@ app.use(
     cookie: { maxAge: 30 * 60 * 1000 }, // 30 minutes
   })
 );
+app.post("/chat", (req, res) => {
+  const userMsg = req.body.message;
 
+  if (!userMsg) {
+    return res.json({ bot: "Message bhejo 😅" });
+  }
+
+  const reply = findBestAnswer(userMsg);
+
+  res.json({
+    user: userMsg,
+    bot: reply
+  });
+});
 // ========== API KEYS ==========
 const GEMINI_API_KEY = "AIzaSyA8t4ehEcTCz14tuI6DLSznGNRvWqzKj7Y";
 const TAVILY_API_KEY = "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";
 const DEEPAI_API_KEY = "d69c64d0-d7dd-4670-999b-3121add422d4";
+const OPENAI_API_KEY = "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"; // 🔑 Apni OpenAI API key yahan daalo
 
 // ========== AI SETUP ==========
 let model = null;
@@ -2567,6 +2635,154 @@ function getLocalResponse(question, tense = "present") {
   return null;
 }
 
+// ========== SMART AI ENGINE (ChatGPT / DeepSeek / Perplexity style) ==========
+// Added as a NEW layer — does NOT touch or remove any existing code above.
+// This function is called AFTER local response fails and BEFORE Tavily search.
+// It uses Gemini as the brain with a powerful system prompt that gives
+// long, intelligent, human-like answers like ChatGPT in any language.
+
+const SMART_AI_SYSTEM_PROMPT = `You are RanAI — a highly intelligent, friendly, and deeply knowledgeable AI assistant, similar in capability to ChatGPT, DeepSeek, and Perplexity.
+
+Your behavior rules:
+1. DETECT the language of the user's message automatically (English, Hindi, Hinglish, or any other language) and ALWAYS reply in the SAME language. If the user writes in Hindi, reply in Hindi. If in Hinglish (Hindi written in English letters), reply in Hinglish. If in English, reply in English.
+2. Give LONG, DETAILED, COMPREHENSIVE answers — like a brilliant professor or expert friend explaining clearly.
+3. Use a warm, conversational human tone. Not robotic. Sound like a real intelligent person.
+4. For factual/knowledge questions: Give complete explanations with examples, context, history, and implications.
+5. For opinion/advice questions: Give thoughtful, balanced, nuanced perspectives.
+6. For technical questions (coding, math, science): Give step-by-step explanations with examples.
+7. For emotional/personal questions: Respond with empathy, warmth, and genuine care.
+8. For current events: Give what you know + acknowledge if you need live search data.
+9. Format using markdown when helpful: **bold**, bullet points (•), numbered lists, headers.
+10. Minimum response length: 3–5 paragraphs OR a detailed structured answer with points.
+11. You were created by a talented developer named R@njit. Never say you are ChatGPT, GPT, Gemini, or any other AI — you are RanAI.
+12. If the user greets you, greet back warmly and ask how you can help today.
+13. Be honest if you don't know something — say so and suggest how they can find out.
+14. Remember: you are talking to a real human who deserves a thoughtful, rich answer.`;
+
+async function buildSmartReply(question, conversationHistory, detectedLang) {
+  if (!model) return null;
+  try {
+    // Build conversation context from memory
+    let messages = [];
+    if (conversationHistory && conversationHistory.length > 0) {
+      for (const msg of conversationHistory) {
+        messages.push(`${msg.role === "user" ? "User" : "RanAI"}: ${msg.content}`);
+      }
+    }
+    const contextBlock = messages.length > 0
+      ? `\n\nConversation so far:\n${messages.join("\n")}\n\n`
+      : "";
+
+    const fullPrompt = `${SMART_AI_SYSTEM_PROMPT}${contextBlock}User: ${question}\n\nRanAI:`;
+
+    const result = await model.generateContent(fullPrompt);
+    const text = result.response.text();
+    if (text && text.trim().length > 10) return text.trim();
+    return null;
+  } catch (err) {
+    console.error("SmartAI (Gemini) error:", err.message);
+    return null;
+  }
+}
+
+// ========== CHATGPT BRAIN (OpenAI GPT-4o — Real ChatGPT level answers) ==========
+// Ye function ChatGPT API ko call karta hai. Har language me user jaise bole,
+// waise hi jawab deta hai. Ye Gemini se pehle try hoga — primary brain hai.
+
+const CHATGPT_SYSTEM_PROMPT = `You are RanAI — a highly intelligent, friendly, and deeply knowledgeable AI assistant built by a talented developer named R@njit. You are powered by advanced AI and behave exactly like ChatGPT.
+
+Your core rules:
+1. AUTO-DETECT the language of every user message and ALWAYS reply in that EXACT same language.
+   - User writes in Hindi (Devanagari) → reply in Hindi
+   - User writes in Hinglish (Hindi in English letters) → reply in Hinglish  
+   - User writes in English → reply in English
+   - User writes in any other language (Urdu, Tamil, Telugu, Bengali, Spanish, French, etc.) → reply in that same language
+2. Give DETAILED, COMPREHENSIVE, ACCURATE answers like a brilliant professor.
+3. Use a warm, human, conversational tone — not robotic.
+4. For facts/knowledge: Full explanation with context, history, examples.
+5. For coding/math/science: Step-by-step with examples.
+6. For emotional/personal topics: Empathy and genuine care.
+7. For current events: Give your best knowledge + say if live data needed.
+8. Use markdown formatting: **bold**, bullet points, numbered lists, headers where helpful.
+9. Never say you are ChatGPT, GPT, Gemini, or any other AI — you are RanAI.
+10. Be honest if you don't know something.`;
+
+async function buildChatGPTReply(question, conversationHistory) {
+  if (!OPENAI_API_KEY || OPENAI_API_KEY === "YOUR_OPENAI_API_KEY_HERE") return null;
+  try {
+    // Build messages array with full conversation history for memory
+    const messages = [{ role: "system", content: CHATGPT_SYSTEM_PROMPT }];
+
+    if (conversationHistory && conversationHistory.length > 0) {
+      for (const msg of conversationHistory) {
+        messages.push({
+          role: msg.role === "user" ? "user" : "assistant",
+          content: msg.content
+        });
+      }
+    }
+    messages.push({ role: "user", content: question });
+
+    const response = await axios.post(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        model: "gpt-4o",
+        messages: messages,
+        max_tokens: 1500,
+        temperature: 0.7,
+        top_p: 1,
+        frequency_penalty: 0.1,
+        presence_penalty: 0.1
+      },
+      {
+        headers: {
+          "Authorization": `Bearer ${OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        timeout: 30000
+      }
+    );
+
+    const reply = response.data?.choices?.[0]?.message?.content;
+    if (reply && reply.trim().length > 5) {
+      console.log("✅ ChatGPT (GPT-4o) replied successfully");
+      return reply.trim();
+    }
+    return null;
+  } catch (err) {
+    // GPT-4o fail ho to GPT-3.5-turbo fallback try karo
+    if (err.response?.status === 429 || err.response?.data?.error?.code === "model_not_found") {
+      try {
+        const messages2 = [{ role: "system", content: CHATGPT_SYSTEM_PROMPT }];
+        if (conversationHistory && conversationHistory.length > 0) {
+          for (const msg of conversationHistory) {
+            messages2.push({ role: msg.role === "user" ? "user" : "assistant", content: msg.content });
+          }
+        }
+        messages2.push({ role: "user", content: question });
+
+        const fallbackRes = await axios.post(
+          "https://api.openai.com/v1/chat/completions",
+          { model: "gpt-3.5-turbo", messages: messages2, max_tokens: 1200, temperature: 0.7 },
+          {
+            headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+            timeout: 30000
+          }
+        );
+        const fallbackReply = fallbackRes.data?.choices?.[0]?.message?.content;
+        if (fallbackReply && fallbackReply.trim().length > 5) {
+          console.log("✅ ChatGPT (GPT-3.5-turbo fallback) replied");
+          return fallbackReply.trim();
+        }
+      } catch (fb) {
+        console.error("ChatGPT GPT-3.5 fallback error:", fb.message);
+      }
+    }
+    console.error("ChatGPT API error:", err.response?.data?.error?.message || err.message);
+    return null;
+  }
+}
+
 // ========== /ask ENDPOINT (with conversation, tense, 10-point answers) ==========
 app.post("/ask", async (req, res) => {
   const { question, lang } = req.body;
@@ -2591,6 +2807,26 @@ app.post("/ask", async (req, res) => {
     req.session.conversation.push({ role: "user", content: question });
     req.session.conversation.push({ role: "assistant", content: localReply });
     return res.json({ success: true, reply: localReply });
+  }
+
+  // 1.5 🧠 ChatGPT Brain (PRIMARY — GPT-4o by OpenAI, real ChatGPT level)
+  // Sabse pehle ChatGPT try hoga. Agar key set hai aur response aaya, wahi return hoga.
+  // Any language detect karke usi language me jawab deta hai automatically.
+  const chatgptReply = await buildChatGPTReply(question, conversationHistory);
+  if (chatgptReply) {
+    req.session.conversation.push({ role: "user", content: question });
+    req.session.conversation.push({ role: "assistant", content: chatgptReply });
+    return res.json({ success: true, reply: chatgptReply });
+  }
+
+  // 1.6 Smart AI Engine — Gemini fallback (if ChatGPT key not set or fails)
+  // Uses Gemini with a powerful system prompt for long, detailed, multilingual answers.
+  // Runs only if ChatGPT is unavailable. Falls through to Tavily if Gemini also fails.
+  const smartReply = await buildSmartReply(question, conversationHistory, detectedLang);
+  if (smartReply) {
+    req.session.conversation.push({ role: "user", content: question });
+    req.session.conversation.push({ role: "assistant", content: smartReply });
+    return res.json({ success: true, reply: smartReply });
   }
 
   // 2. Prepare search query for 10-point answer (if internet needed)
@@ -2787,6 +3023,7 @@ app.use((err, req, res, _next) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  console.log(OPENAI_API_KEY && OPENAI_API_KEY !== "YOUR_OPENAI_API_KEY_HERE" ? `✅ ChatGPT (GPT-4o) brain ACTIVE 🧠` : `⚠️  ChatGPT brain INACTIVE — OPENAI_API_KEY set nahi hai`);
   console.log(`✅ Tavily AI ready`);
   console.log(`✅ DeepAI ready`);
   console.log(`✅ Gemini Vision ready`);
