@@ -58,8 +58,8 @@
 
   <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
-  <!-- ═══ MAIN CHAT AREA (hidden until logged in) ═══ -->
-  <div class="main" id="main" style="display:none;">
+  <!-- ═══ MAIN CHAT AREA (now visible, login removed) ═══ -->
+  <div class="main" id="main" style="display:flex;">
     <div class="topbar" id="topbar">
       <div class="topbar-left">
         <button class="icon-btn topbar-sidebar-btn" id="sidebarToggle">
@@ -179,69 +179,7 @@
     </button>
   </div>
 
-  <!-- ═══ GOOGLE SIGN‑IN MODAL (replaces OTP modal) ═══ -->
-  <div class="signup-modal" id="authModal" style="display:flex;">
-    <div class="modal-bg-anim"></div>
-    <div class="signup-box" style="max-width: 400px;">
-      <div class="signup-logo">
-        <div class="signup-logo-ring">
-          <img src="LOGO.png" alt="RanAI" />
-        </div>
-        <span class="signup-brand-name">RanAI</span>
-      </div>
-      <h2 style="text-align:center; margin: 0 0 8px 0;">Welcome back</h2>
-      <p style="text-align:center; color:#888; margin-bottom: 28px;">Sign in to continue</p>
-      <button id="googleSignInBtn" class="google-btn" style="display:flex; align-items:center; justify-content:center; gap:12px; width:100%; background:#fff; color:#333; border:none; border-radius:40px; padding:12px; font-size:1rem; font-weight:500; cursor:pointer;">
-        <img src="https://fonts.gstatic.com/s/i/productlogos/googleg/v6/24px.svg" alt="Google logo" width="20">
-        Sign in with Google
-      </button>
-      <p class="signup-footer" style="margin-top: 28px;">By continuing, you agree to our <a href="https://policies.google.com/terms" target="_blank">Terms</a> &amp; <a href="https://policies.google.com/privacy" target="_blank">Privacy</a></p>
-    </div>
-  </div>
-
-  <!-- ═══ NAME MODAL (for first‑time users) ═══ -->
-  <div id="nameModal" class="signup-modal" style="display:none;">
-    <div class="modal-bg-anim"></div>
-    <div class="signup-box" style="max-width: 400px;">
-      <div class="signup-logo">
-        <div class="signup-logo-ring">
-          <img src="LOGO.png" alt="RanAI" />
-        </div>
-        <span class="signup-brand-name">RanAI</span>
-      </div>
-      <h2 style="text-align:center; margin: 0 0 8px 0;">One more step</h2>
-      <p style="text-align:center; color:#888; margin-bottom: 24px;">How would you like us to call you?</p>
-      <div class="form-group">
-        <label>Your name</label>
-        <input type="text" id="userDisplayName" placeholder="e.g., Ranjit" autocomplete="name" />
-      </div>
-      <button id="submitNameBtn" class="btn-primary" style="width:100%;">
-        <span>Continue</span>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="20 6 9 17 4 12"/></svg>
-      </button>
-      <div id="nameError" style="color:#f87171; font-size:13px; margin-top:12px; text-align:center;"></div>
-    </div>
-  </div>
-
-  <!-- ═══ PROFILE MODAL (shows email, name, picture) ═══ -->
-  <div id="profileModal" class="profile-modal" style="display:none;">
-    <div class="profile-box">
-      <button class="profile-close" id="closeProfileBtn">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </button>
-      <div class="profile-avatar-wrap">
-        <img id="profileAvatar" src="" alt="Avatar" />
-        <div class="profile-avatar-ring"></div>
-      </div>
-      <h2 id="profileName" class="profile-name"></h2>
-      <p id="profileEmail" class="profile-email"></p> <!-- shows user email -->
-      <div class="profile-stats">
-        <div class="stat-item"><span class="stat-val" id="statChats">0</span><span class="stat-label">Chats</span></div>
-        <div class="stat-sep"></div>
-        <div class="stat-item"><span class="stat-val">Free</span><span class="stat-label">Plan</span></div>
-      </div>
-    </div>
-  </div>
+  <!-- All login/signup modals have been removed -->
 
   <script src="script.js"></script>
 </body>
