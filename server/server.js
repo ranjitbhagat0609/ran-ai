@@ -1,11 +1,13 @@
 const express = require("express");
 const cors = require("cors");
-const bcrypt = require("bcryptjs");
+const session = require("express-session");
+const passport = require("passport");
+const GoogleStrategy = require("passport-google-oauth20").Strategy;
+const jwt = require("jsonwebtoken");
 const path = require("path");
 const multer = require("multer");
 const axios = require("axios");
 const FormData = require("form-data");
-const { Resend } = require("resend");
 const db = require("./db");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { tavily } = require("@tavily/core");
@@ -15,317 +17,366 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "../client")));
 
-// ========== API KEYS ==========
+// ========== SESSION & JWT ==========
+app.use(session({
+  secret: "ranai_super_secret_123",
+  resave: false,
+  saveUninitialized: true,
+  cookie: { secure: true }   // set false if not using HTTPS locally
+}));
+app.use(passport.initialize());
+app.use(passport.session());
+
+const JWT_SECRET = "ranai_jwt_secret_456";
+
+// ========== DATABASE SCHEMA (MySQL 5.7+ compatible) ==========
+const initDB = () => {
+  const createUsersTable = `
+    CREATE TABLE IF NOT EXISTS users (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      email VARCHAR(255) UNIQUE,
+      google_id VARCHAR(255),
+      picture TEXT,
+      name VARCHAR(255),
+      profile_completed BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `;
+  db.query(createUsersTable, (err) => {
+    if (err) console.error("❌ Table creation error:", err);
+    else console.log("✅ Users table ready");
+  });
+};
+initDB();
+
+// ========== API KEYS (move to env in production) ==========
 const GEMINI_API_KEY = "AIzaSyA8t4ehEcTCz14tuI6DLSznGNRvWqzKj7Y";
 const TAVILY_API_KEY = "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";
 const DEEPAI_API_KEY = "d69c64d0-d7dd-4670-999b-3121add422d4";
 
-// Resend API key (provided by user)
-const RESEND_API_KEY = "re_FTEQjwtn_CY6tjZr7kyDuMrwNsYU6uMDL";
-
-const resend = new Resend(RESEND_API_KEY);
-
-const tvly = tavily({ apiKey: TAVILY_API_KEY });
-
+// ========== AI SETUP ==========
 let model = null;
 try {
   const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
   model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
   console.log("✅ Gemini AI ready (vision supported)");
 } catch (err) {
-  console.log("⚠️ Gemini not available:", err.message);
+  console.warn("⚠️ Gemini not available:", err.message);
 }
+
+const tvly = tavily({ apiKey: TAVILY_API_KEY });
 
 // ========== MULTER ==========
 const storage = multer.memoryStorage();
 const upload = multer({
-  storage: storage,
+  storage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ["image/jpeg", "image/jpg", "image/png"];
-    if (allowedTypes.includes(file.mimetype)) cb(null, true);
+    const allowed = ["image/jpeg", "image/jpg", "image/png"];
+    if (allowed.includes(file.mimetype)) cb(null, true);
     else cb(new Error("Only .jpeg, .jpg, .png formats allowed"), false);
   },
 });
 
-// ========== OTP STORAGE ==========
-let otpStore = {};
-let verifiedUsers = {};
+// ========== GOOGLE OAUTH STRATEGY ==========
+passport.use(new GoogleStrategy({
+    clientID: "782928190840-5fgohc0a790f048oe06n8nu0rtb8n27r.apps.googleusercontent.com",
+    clientSecret: "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",
+    callbackURL: "https://ran-ai.onrender.com/auth/google/callback"
+  },
+  async (accessToken, refreshToken, profile, done) => {
+    try {
+      const email = profile.emails[0].value;
+      const googleId = profile.id;
+      const picture = profile.photos[0]?.value || "";
+      const name = profile.displayName;
 
-// ========== SEND OTP VIA RESEND (fire-and-forget, instant response) ==========
-app.post("/send-otp", async (req, res) => {
-  let { email } = req.body;
-  if (!email) return res.json({ success: false, message: "Email required ❌" });
-  email = email.toLowerCase();
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(email)) return res.json({ success: false, message: "Invalid Email ❌" });
-  
-  const otp = Math.floor(100000 + Math.random() * 900000);
-  otpStore[email] = otp;
-
-  // Send email via Resend in the background (fire and forget)
-  resend.emails.send({
-    from: "RanAI <onboarding@resend.dev>", // You can change to your verified domain later
-    to: email,
-    subject: "Your RanAI OTP Code",
-    html: `<div style="font-family:Arial;max-width:500px;margin:auto;padding:20px;border:1px solid #ddd;border-radius:10px;">
-      <h2 style="color:#10a37f;">RanAI Verification</h2>
-      <p>Your OTP for signup is:</p>
-      <div style="font-size:32px;font-weight:bold;color:#10a37f;margin:20px 0;">${otp}</div>
-      <p>Valid for 10 minutes.</p>
-      <hr><p style="font-size:12px;color:#888;">If you didn't request this, ignore this email.</p>
-    </div>`,
-  }).then(() => {
-    console.log(`📧 OTP sent to ${email}: ${otp}`);
-  }).catch(err => {
-    console.error("Resend error:", err);
-  });
-
-  // Respond immediately to the user
-  res.json({ success: true, message: "OTP sent to your email 📧 (check inbox)" });
-});
-
-app.post("/verify-otp", (req, res) => {
-  let { email, otp } = req.body;
-  if (!email || !otp) return res.json({ success: false, message: "Missing data ❌" });
-  email = email.toLowerCase();
-  if (!otpStore[email]) return res.json({ success: false, message: "OTP not found or expired ❌" });
-  if (String(otpStore[email]) === String(otp)) {
-    verifiedUsers[email] = true;
-    delete otpStore[email];
-    return res.json({ success: true, message: "OTP verified ✅" });
-  }
-  res.json({ success: false, message: "Wrong OTP ❌" });
-});
-
-app.post("/signup", async (req, res) => {
-  try {
-    let { email, password, firstName, lastName } = req.body;
-    if (!email || !password || !firstName || !lastName)
-      return res.json({ success: false, message: "All fields required ❌" });
-    email = email.toLowerCase();
-    if (!verifiedUsers[email]) return res.json({ success: false, message: "Verify OTP first ❌" });
-    const passRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&]).{8,}$/;
-    if (!passRegex.test(password)) return res.json({ success: false, message: "Password must be strong ❌" });
-    const hashedPassword = await bcrypt.hash(password, 10);
-    db.query(
-      "INSERT INTO users (email, password, is_verified, first_name, last_name) VALUES (?, ?, ?, ?, ?)",
-      [email, hashedPassword, true, firstName, lastName],
-      (err) => {
-        if (err) {
-          console.error("DB Error:", err);
-          return res.json({ success: false, message: "User already exists or DB error ❌" });
-        }
-        delete verifiedUsers[email];
-        res.json({ success: true, message: "Signup successful 🎉" });
-      }
-    );
-  } catch (error) {
-    console.error(error);
-    res.json({ success: false, message: "Server error ❌" });
-  }
-});
-
-// ========== LOGIN ENDPOINT ==========
-app.post("/login", async (req, res) => {
-  try {
-    let { email, password } = req.body;
-    if (!email || !password) {
-      return res.json({ success: false, message: "Email and password required ❌" });
-    }
-    email = email.toLowerCase();
-
-    db.query(
-      "SELECT id, email, password, first_name, last_name FROM users WHERE email = ?",
-      [email],
-      async (err, results) => {
-        if (err || results.length === 0) {
-          return res.json({ success: false, message: "Invalid credentials ❌" });
-        }
-        const user = results[0];
-        const match = await bcrypt.compare(password, user.password);
-        if (!match) {
-          return res.json({ success: false, message: "Invalid credentials ❌" });
-        }
-        res.json({
-          success: true,
-          message: "Login successful 🎉",
-          user: {
+      db.query("SELECT * FROM users WHERE email = ?", [email], async (err, results) => {
+        if (err) return done(err);
+        if (results.length === 0) {
+          db.query(
+            "INSERT INTO users (email, google_id, picture, name, profile_completed) VALUES (?, ?, ?, ?, ?)",
+            [email, googleId, picture, name, false],
+            (err, result) => {
+              if (err) return done(err);
+              const newUser = { id: result.insertId, email, name, picture, profile_completed: false };
+              return done(null, newUser);
+            }
+          );
+        } else {
+          const user = results[0];
+          if (!user.google_id || user.picture !== picture) {
+            db.query("UPDATE users SET google_id = ?, picture = ? WHERE email = ?", [googleId, picture, email]);
+          }
+          return done(null, {
             id: user.id,
             email: user.email,
-            firstName: user.first_name,
-            lastName: user.last_name,
-          },
-        });
-      }
+            name: user.name,
+            picture: user.picture,
+            profile_completed: user.profile_completed
+          });
+        }
+      });
+    } catch (error) {
+      return done(error);
+    }
+  }
+));
+
+passport.serializeUser((user, done) => done(null, user.id));
+passport.deserializeUser((id, done) => {
+  db.query("SELECT id, email, name, picture, profile_completed FROM users WHERE id = ?", [id], (err, results) => {
+    if (err) return done(err);
+    done(null, results[0] || null);
+  });
+});
+
+// ========== AUTH ROUTES ==========
+app.get("/auth/google", passport.authenticate("google", { scope: ["profile", "email"] }));
+
+app.get("/auth/google/callback",
+  passport.authenticate("google", { failureRedirect: "/" }),
+  (req, res) => {
+    const token = jwt.sign(
+      {
+        id: req.user.id,
+        email: req.user.email,
+        name: req.user.name,
+        profile_completed: req.user.profile_completed
+      },
+      JWT_SECRET,
+      { expiresIn: "7d" }
     );
-  } catch (error) {
-    console.error(error);
-    res.json({ success: false, message: "Server error ❌" });
+    res.redirect(`/?token=${token}`);
+  }
+);
+
+app.get("/auth/me", (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ success: false, message: "No token" });
+  const token = authHeader.split(" ")[1];
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    db.query("SELECT id, email, name, picture, profile_completed FROM users WHERE id = ?", [decoded.id], (err, results) => {
+      if (err || results.length === 0) return res.status(401).json({ success: false });
+      res.json({ success: true, user: results[0] });
+    });
+  } catch (err) {
+    res.status(401).json({ success: false });
   }
 });
 
-// ========== LOCAL RESPONSE HANDLER (unchanged) ==========
+app.post("/complete-profile", (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ success: false });
+  const token = authHeader.split(" ")[1];
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const { name } = req.body;
+    if (!name || name.trim() === "") {
+      return res.json({ success: false, message: "Name is required" });
+    }
+    db.query("UPDATE users SET name = ?, profile_completed = true WHERE id = ?", [name.trim(), decoded.id], (err) => {
+      if (err) return res.json({ success: false, message: "Database error" });
+      const newToken = jwt.sign(
+        { id: decoded.id, email: decoded.email, name: name.trim(), profile_completed: true },
+        JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+      res.json({ success: true, token: newToken, user: { name: name.trim(), profile_completed: true } });
+    });
+  } catch (err) {
+    res.status(401).json({ success: false });
+  }
+});
+
+app.post("/logout", (req, res) => {
+  req.logout(() => {});
+  res.json({ success: true });
+});
+
+// ========== LANGUAGE DETECTION ==========
 function detectLanguage(text) {
   const t = text.trim();
-  if (/[\u0900-\u097F]/.test(t)) return 'hi';
-  if (/(?:namaste|kaise ho|kya haal|kya chal|thik ho|bahut|mujhe|aap|main|kya baat|baj r|kr r|kar rahe|btao|india|ke bare|ke baare|pm|shukriya)/i.test(t)) return 'hi';
-  return 'en';
+  if (/[\u0900-\u097F]/.test(t)) return "hi";
+  if (/\b(namaste|kaise ho|kya haal|kya chal|thik ho|bahut|mujhe|aap|main|kya baat|btao|shukriya|dhanyawad|nahi|kyun|kab|kahan|kaun|mera|tera|hum|tum|yeh|woh|bhai|dost|accha|theek|bilkul|zaroor)\b/i.test(t))
+    return "hi";
+  return "en";
 }
 
-function evaluateMath(expr) {
+// ========== MATH ENGINE ==========
+function solveMath(input) {
+  let expr = input
+    .replace(/what is|calculate|solve|evaluate|find|value of|the answer to|compute|result of/gi, "")
+    .replace(/\bplus\b/gi, "+")
+    .replace(/\bminus\b/gi, "-")
+    .replace(/\btimes\b|\bmultiplied by\b/gi, "*")
+    .replace(/\bdivided by\b/gi, "/")
+    .replace(/\bmod\b/gi, "%")
+    .replace(/\bto the power of\b|\bpow\b/gi, "**")
+    .replace(/\^/g, "**")
+    .replace(/[,،]/g, "")
+    .trim();
+
+  if (!/^[\d\s+\-*/().%**\[\]]+$/.test(expr)) return null;
+  if (!/\d/.test(expr)) return null;
+
   try {
-    let sanitized = expr.replace(/\s/g, '').replace(/\^/g, '**');
-    if (!/^[\d+\-*/().%**]+$/.test(sanitized)) return null;
-    const result = Function('"use strict"; return (' + sanitized + ')')();
-    if (typeof result === 'number' && isFinite(result)) return result;
-    return null;
-  } catch (e) {
-    return null;
+    const result = Function('"use strict"; return (' + expr + ")")();
+    if (typeof result === "number" && isFinite(result)) {
+      return parseFloat(result.toFixed(8));
+    }
+  } catch (_) {}
+  return null;
+}
+
+function buildTable(num) {
+  const rows = [];
+  for (let i = 1; i <= 10; i++) rows.push(`${num} × ${i} = ${num * i}`);
+  return `📊 **Table of ${num}**\n` + rows.join("\n");
+}
+
+// ========== LOCAL RESPONSE HANDLER ==========
+function cleanInput(text) {
+  const typoMap = {
+    "mje": "mujhe", "muje": "mujhe", "ni": "nahi", "nhi": "nahi", "nai": "nahi",
+    "kon": "kaun", "bnaya": "banaya", "mra": "mera", "kr rha": "kar raha",
+    "kr rhe": "kar rahe", "btao": "batao", "kya kr rhe": "kya kar rahe ho",
+  };
+  let cleaned = text.toLowerCase().trim();
+  for (const [typo, correct] of Object.entries(typoMap)) {
+    cleaned = cleaned.replace(new RegExp(`\\b${typo}\\b`, "gi"), correct);
   }
+  return cleaned;
 }
 
 function getLocalResponse(question) {
-  const q = question.toLowerCase().trim();
+  const q    = cleanInput(question);
   const lang = detectLanguage(question);
-  const hi = lang === 'hi';
+  const hi   = lang === "hi";
 
-  if (/^(hi|hello|hey|namaste|hlo|hii|hola|sup|yo)/i.test(q)) {
-    if (hi) return "नमस्ते! 😊 मेरा नाम RanAi है। आपसे मिलकर खुशी हुई। कोई सवाल पूछिए?";
-    else return "Hello! 😊 I'm RanAi. Nice to meet you. How can I help?";
+  if (/^(hi|hello|hey|namaste|hlo|hii|hola|sup|yo)\b/i.test(q)) {
+    return hi ? "नमस्ते! 😊 मैं RanAI हूँ। कोई सवाल पूछिए?" : "Hello! 😊 I'm RanAI. How can I help you today?";
   }
-  if (/(what is your name|your name|tumhara naam kya|aapka naam|who are you)/i.test(q)) {
-    if (hi) return "मेरा नाम RanAi है। मैं एक AI सहायक हूँ।";
-    else return "My name is RanAi. I'm an AI assistant.";
+  if (/(what is your name|your name|tumhara naam|aapka naam|who are you|kon ho)/i.test(q)) {
+    return hi ? "मेरा नाम RanAI है। मैं एक AI सहायक हूँ।" : "My name is RanAI. I'm an AI assistant.";
   }
-  if (/(who (made|created|built) you|tumko kisne banaya|aapko kisne banaya|your creator)/i.test(q)) {
-    if (hi) return "मुझे **R@njit** ने बनाया है। वह एक शानदार डेवलपर हैं! 😊";
-    else return "I was created by **R@njit**, a brilliant developer! 😊";
+  if (/(who (made|created|built) you|tumko kisne banaya|kisne banaya)/i.test(q)) {
+    return hi ? "मुझे **R@njit** ने बनाया है। वो एक शानदार डेवलपर हैं! 😊" : "I was created by **R@njit**, a brilliant developer! 😊";
   }
-  if (/(i love you|love you|main tumse pyar karta|i <3 you)/i.test(q)) {
-    if (hi) return "ओह! 😊 शुक्रिया, लेकिन मैं तो एक AI हूँ। फिर भी, आपका प्यार मेरे लिए बहुत मायने रखता है! ❤️";
-    else return "Oh! 😊 Thank you, but I'm just an AI. Still, your love means a lot! ❤️";
+  if (/(how are you|kaise ho|kya haal|kya chal)/i.test(q)) {
+    return hi ? "बिल्कुल ठीक हूँ! आप कैसे हैं? 😊" : "I'm doing great, thanks! How about you? 😊";
   }
-  let tableMatch = q.match(/(?:table of|ka table|ka pahada|table)\s+(\d+)/i);
+  if (/(thank|shukriya|dhanyavad|dhanyawad)/i.test(q)) {
+    return hi ? "आपका स्वागत है! 😊 कभी भी पूछ सकते हैं।" : "You're welcome! 😊 Happy to help anytime.";
+  }
+  if (/(good morning|gm|suprabhat|सुप्रभात)/i.test(q)) {
+    return hi ? "सुप्रभात! ☀️ आपका दिन शुभ हो।" : "Good morning! ☀️ Have a wonderful day.";
+  }
+  if (/(good night|gn|shubh ratri|शुभ रात्रि)/i.test(q)) {
+    return hi ? "शुभ रात्रि! 🌙 अच्छी नींद लें।" : "Good night! 🌙 Sleep well.";
+  }
+  if (/(i love you|love you|main tumse pyar)/i.test(q)) {
+    return hi ? "ओह! 😊 शुक्रिया, लेकिन मैं एक AI हूँ। फिर भी बहुत बहुत धन्यवाद! ❤️" : "Oh! 😊 Thank you, but I'm an AI. Still, that means a lot! ❤️";
+  }
+  if (/(what can you do|your purpose|tum kya kar sakte)/i.test(q)) {
+    return hi
+      ? "मैं सवालों के जवाब दे सकता हूँ, गणित हल कर सकता हूँ, टेबल बना सकता हूँ, इमेज पहचान सकता हूँ, और बहुत कुछ!"
+      : "I can answer questions, solve math, build tables, analyze images, search the web, and much more!";
+  }
+
+  const tableMatch = q.match(/(?:table of|ka table|ka pahada|pahada)\s+(\d+)/i);
   if (tableMatch) {
-    let num = parseInt(tableMatch[1]);
-    if (num >= 1 && num <= 1000) {
-      let lines = [];
-      for (let i = 1; i <= 10; i++) lines.push(`${num} × ${i} = ${num * i}`);
-      return `📊 **Table of ${num}**\n` + lines.join("\n");
-    } else {
-      return hi ? "कृपया 1 से 1000 के बीच की संख्या दें।" : "Please enter a number between 1 and 1000.";
-    }
+    const num = parseInt(tableMatch[1]);
+    if (num >= 1 && num <= 1000) return buildTable(num);
+    return hi ? "कृपया 1 से 1000 के बीच संख्या दें।" : "Please enter a number between 1 and 1000.";
   }
-  let rangeMatch = q.match(/(?:numbers?|1 to|from 1 to)\s*(\d+)/i);
-  if (rangeMatch) {
-    let max = parseInt(rangeMatch[1]);
-    if (max >= 1 && max <= 1000) {
-      let nums = [];
-      for (let i = 1; i <= max; i++) nums.push(i);
-      if (nums.length > 20) {
-        return hi ? `1 से ${max} तक की संख्याएँ (केवल पहली 20 दिखा रहा हूँ):\n${nums.slice(0,20).join(", ")} ...` 
-                  : `Numbers from 1 to ${max} (showing first 20):\n${nums.slice(0,20).join(", ")} ...`;
-      } else {
-        return hi ? `1 से ${max} तक की संख्याएँ:\n${nums.join(", ")}` 
-                  : `Numbers from 1 to ${max}:\n${nums.join(", ")}`;
-      }
-    } else {
-      return hi ? "कृपया 1 से 1000 के बीच की अधिकतम संख्या दें।" : "Please enter a maximum number between 1 and 1000.";
-    }
+
+  const mathResult = solveMath(q);
+  if (mathResult !== null) {
+    const exprDisplay = q
+      .replace(/what is|calculate|solve|evaluate|find|value of|the answer to|compute|result of/gi, "")
+      .trim();
+    return hi
+      ? `🧮 गणना: **${exprDisplay} = ${mathResult}**`
+      : `🧮 Result: **${exprDisplay} = ${mathResult}**`;
   }
-  let mathExpr = q.replace(/(what is|calculate|solve|evaluate|find|value of|the answer to)/gi, '').trim();
-  if (mathExpr.match(/^[\d\s\+\-\*\/\(\)\.\^%]+$/)) {
-    const result = evaluateMath(mathExpr);
-    if (result !== null) {
-      if (hi) return `गणना का परिणाम: ${mathExpr} = ${result}`;
-      else return `Result: ${mathExpr} = ${result}`;
-    }
+
+  let m;
+  m = q.match(/(\d+(?:\.\d+)?)\s*(?:\+|plus)\s*(\d+(?:\.\d+)?)/i);
+  if (m) { const r = parseFloat(m[1]) + parseFloat(m[2]); return `${m[1]} + ${m[2]} = **${r}**`; }
+  m = q.match(/(\d+(?:\.\d+)?)\s*(?:-|minus)\s*(\d+(?:\.\d+)?)/i);
+  if (m) { const r = parseFloat(m[1]) - parseFloat(m[2]); return `${m[1]} - ${m[2]} = **${r}**`; }
+  m = q.match(/(\d+(?:\.\d+)?)\s*(?:\*|x|times|×)\s*(\d+(?:\.\d+)?)/i);
+  if (m) { const r = parseFloat(m[1]) * parseFloat(m[2]); return `${m[1]} × ${m[2]} = **${r}**`; }
+  m = q.match(/(\d+(?:\.\d+)?)\s*(?:\/|÷|divided by)\s*(\d+(?:\.\d+)?)/i);
+  if (m) {
+    const b = parseFloat(m[2]);
+    if (b === 0) return hi ? "शून्य से भाग नहीं हो सकता।" : "Cannot divide by zero.";
+    const r = parseFloat(m[1]) / b;
+    return `${m[1]} ÷ ${m[2]} = **${parseFloat(r.toFixed(8))}**`;
   }
-  let opMatch = q.match(/(\d+)\s*\+\s*(\d+)/);
-  if (opMatch) {
-    let a = parseInt(opMatch[1]), b = parseInt(opMatch[2]);
-    if (hi) return `${a} + ${b} = ${a+b}`;
-    else return `${a} + ${b} = ${a+b}`;
-  }
-  opMatch = q.match(/(\d+)\s*-\s*(\d+)/);
-  if (opMatch) {
-    let a = parseInt(opMatch[1]), b = parseInt(opMatch[2]);
-    if (hi) return `${a} - ${b} = ${a-b}`;
-    else return `${a} - ${b} = ${a-b}`;
-  }
-  opMatch = q.match(/(\d+)\s*\*\s*(\d+)/);
-  if (opMatch) {
-    let a = parseInt(opMatch[1]), b = parseInt(opMatch[2]);
-    if (hi) return `${a} × ${b} = ${a*b}`;
-    else return `${a} × ${b} = ${a*b}`;
-  }
-  opMatch = q.match(/(\d+)\s*\/\s*(\d+)/);
-  if (opMatch) {
-    let a = parseInt(opMatch[1]), b = parseInt(opMatch[2]);
-    if (b === 0) return hi ? "शून्य से भाग नहीं कर सकते।" : "Cannot divide by zero.";
-    if (hi) return `${a} ÷ ${b} = ${a/b}`;
-    else return `${a} ÷ ${b} = ${a/b}`;
-  }
-  if (/(how are you|kaise ho|kya haal)/i.test(q)) {
-    if (hi) return "मैं बिल्कुल ठीक हूँ, शुक्रिया! आप कैसे हैं? 😊";
-    else return "I'm doing great, thanks! How about you? 😊";
-  }
-  if (/(thank you|thanks|shukriya|dhanyavaad)/i.test(q)) {
-    if (hi) return "आपका स्वागत है! 😊 कभी भी पूछ सकते हैं।";
-    else return "You're welcome! 😊 Happy to help anytime.";
-  }
-  if (/(good morning|gm|suprabhat)/i.test(q)) {
-    if (hi) return "सुप्रभात! ☀️ आपका दिन शुभ हो।";
-    else return "Good morning! ☀️ Have a wonderful day.";
-  }
-  if (/(good night|gn|shubh ratri)/i.test(q)) {
-    if (hi) return "शुभ रात्रि! 🌙 अच्छी नींद लें।";
-    else return "Good night! 🌙 Sleep well.";
-  }
-  if (/(what can you do|your purpose|tum kya kar sakte ho)/i.test(q)) {
-    if (hi) return "मैं सवालों के जवाब दे सकता हूँ, गणित हल कर सकता हूँ, टेबल बना सकता हूँ, इमेज पहचान सकता हूँ, और बहुत कुछ!";
-    else return "I can answer questions, solve math, generate tables, analyze images, and much more!";
-  }
+
   return null;
 }
 
 // ========== /ask ENDPOINT ==========
 app.post("/ask", async (req, res) => {
-  const { question } = req.body;
-  if (!question || question.trim() === "") {
+  const { question, lang } = req.body;
+  if (!question || !question.trim()) {
     return res.json({ success: false, reply: "कृपया कुछ पूछें!" });
   }
+
   const localReply = getLocalResponse(question);
-  if (localReply) {
-    return res.json({ success: true, reply: localReply });
-  }
+  if (localReply) return res.json({ success: true, reply: localReply });
+
+  const detectedLang = lang || detectLanguage(question);
+  const searchQuery = detectedLang === "hi"
+    ? `${question} (respond in Hindi)`
+    : question;
+
   try {
-    const response = await tvly.search(question, {
+    const response = await tvly.search(searchQuery, {
       searchDepth: "advanced",
       maxResults: 5,
       includeAnswer: true,
     });
-    let reply = response.answer;
-    if (!reply || reply.trim() === "") {
-      if (response.results && response.results.length > 0) {
-        reply = `🔍 कुछ जानकारी मिली:\n\n${response.results.map(r => `• ${r.title}\n  ${r.content.substring(0, 200)}...`).join("\n\n")}`;
-      } else {
-        reply = "क्षमा करें, मुझे इस सवाल का जवाब नहीं मिला। कृपया दूसरे शब्दों में पूछें।";
-      }
+
+    let reply = (response.answer || "").trim();
+
+    if (!reply && response.results && response.results.length > 0) {
+      reply = response.results
+        .slice(0, 3)
+        .map(r => `• **${r.title}**\n  ${r.content.substring(0, 200)}…`)
+        .join("\n\n");
     }
-    res.json({ success: true, reply });
-  } catch (error) {
-    console.error("Tavily error:", error);
+
+    if (!reply) {
+      reply = detectedLang === "hi"
+        ? "क्षमा करें, इस सवाल का जवाब नहीं मिला। कृपया अलग शब्दों में पूछें।"
+        : "Sorry, I couldn't find an answer. Please try rephrasing your question.";
+    }
+
+    return res.json({ success: true, reply });
+  } catch (tavilyErr) {
+    console.error("Tavily error:", tavilyErr.message);
+
     if (model) {
       try {
-        const result = await model.generateContent(`Answer this question concisely: "${question}"`);
+        const langInstruction = detectedLang === "hi" ? "Please reply in Hindi." : "Please reply in English.";
+        const result = await model.generateContent(
+          `Answer this question concisely and helpfully. ${langInstruction}\n\nQuestion: "${question}"`
+        );
         return res.json({ success: true, reply: result.response.text() });
       } catch (geminiErr) {
-        console.error("Gemini fallback error:", geminiErr);
+        console.error("Gemini fallback error:", geminiErr.message);
       }
     }
-    res.json({ success: false, reply: "सर्वर में समस्या है, कृपया बाद में प्रयास करें!" });
+
+    const fallback = detectLanguage(question) === "hi"
+      ? "सर्वर में समस्या आई। थोड़ी देर बाद फिर कोशिश करें।"
+      : "I'm having trouble connecting right now. Please try again in a moment.";
+    res.json({ success: false, reply: fallback });
   }
 });
 
@@ -348,9 +399,9 @@ async function getImageCaptionDeepAI(imageBuffer, mimeType) {
         timeout: 20000,
       });
       const data = response.data;
-      if (data && data.output && typeof data.output === "string" && data.output.trim()) return data.output.trim();
-      if (data && data.output && data.output.captions && data.output.captions.length > 0) return data.output.captions[0].caption;
-      if (data && Array.isArray(data.output) && data.output.length > 0) {
+      if (data?.output && typeof data.output === "string" && data.output.trim()) return data.output.trim();
+      if (data?.output?.captions?.length) return data.output.captions[0].caption;
+      if (Array.isArray(data?.output) && data.output.length) {
         if (data.output[0].label) return data.output.map(o => o.label).join(", ");
         if (data.output[0].caption) return data.output[0].caption;
       }
@@ -365,9 +416,9 @@ async function describeImageWithGemini(imageBuffer, mimeType, userQuery) {
   if (!model) return null;
   try {
     const base64Image = imageBuffer.toString("base64");
-    const prompt = userQuery && userQuery.trim()
-      ? `Analyze this image carefully and answer: "${userQuery}". Be detailed.`
-      : `Describe this image in detail: objects, people, text, colors, scene.`;
+    const prompt = userQuery?.trim()
+      ? `Analyze this image carefully and answer: "${userQuery}". Be detailed and helpful.`
+      : "Describe this image in detail: objects, people, text, colors, scene, and context.";
     const result = await model.generateContent([
       { text: prompt },
       { inlineData: { mimeType, data: base64Image } },
@@ -382,53 +433,62 @@ async function describeImageWithGemini(imageBuffer, mimeType, userQuery) {
 app.post("/analyze", upload.single("image"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ success: false, error: "No image uploaded" });
-    const userQuery = (req.body.query || "").trim();
+    const userQuery  = (req.body.query || "").trim();
     const imageBuffer = req.file.buffer;
-    const mimeType = req.file.mimetype;
-    let finalAnswer = null, detected = "image";
+    const mimeType   = req.file.mimetype;
+
     const geminiAnswer = await describeImageWithGemini(imageBuffer, mimeType, userQuery);
     if (geminiAnswer) {
-      detected = "image (Gemini Vision)";
-      finalAnswer = geminiAnswer;
-    } else {
-      const deepAICaption = await getImageCaptionDeepAI(imageBuffer, mimeType);
-      if (deepAICaption) {
-        detected = deepAICaption;
-        const searchQuery = userQuery ? `${deepAICaption}: ${userQuery}` : `Tell me detailed information about "${deepAICaption}"`;
-        try {
-          const tavilyResponse = await tvly.search(searchQuery, { searchDepth: "advanced", maxResults: 5, includeAnswer: true });
-          finalAnswer = tavilyResponse.answer;
-          if (!finalAnswer && tavilyResponse.results?.length) {
-            finalAnswer = tavilyResponse.results.slice(0,3).map(r => `**${r.title}**\n${r.content.substring(0,400)}...`).join("\n\n");
-          }
-          if (!finalAnswer) finalAnswer = `I can see: ${deepAICaption}.`;
-        } catch (tavilyErr) {
-          console.error("Tavily error:", tavilyErr.message);
-          finalAnswer = `The image shows: ${deepAICaption}.`;
+      return res.json({ success: true, detected: "image (Gemini Vision)", answer: geminiAnswer });
+    }
+
+    const deepAICaption = await getImageCaptionDeepAI(imageBuffer, mimeType);
+    if (deepAICaption) {
+      const searchQuery = userQuery
+        ? `${deepAICaption}: ${userQuery}`
+        : `Detailed information about "${deepAICaption}"`;
+      try {
+        const tavilyResponse = await tvly.search(searchQuery, { searchDepth: "advanced", maxResults: 5, includeAnswer: true });
+        let finalAnswer = tavilyResponse.answer;
+        if (!finalAnswer && tavilyResponse.results?.length) {
+          finalAnswer = tavilyResponse.results.slice(0, 3).map(r => `**${r.title}**\n${r.content.substring(0, 400)}…`).join("\n\n");
         }
-      } else {
-        return res.json({ success: false, error: "Could not analyze this image. Please try a clearer JPG/PNG under 5MB." });
+        if (!finalAnswer) finalAnswer = `I can see: ${deepAICaption}.`;
+        return res.json({ success: true, detected: deepAICaption, answer: finalAnswer });
+      } catch (tavilyErr) {
+        console.error("Tavily error:", tavilyErr.message);
+        return res.json({ success: true, detected: deepAICaption, answer: `The image shows: ${deepAICaption}.` });
       }
     }
-    res.json({ success: true, detected, answer: finalAnswer });
+
+    return res.json({ success: false, error: "Could not analyze this image. Please try a clearer JPG/PNG under 5MB." });
   } catch (error) {
     console.error("Image analysis error:", error);
     res.status(500).json({ success: false, error: "Image processing failed: " + error.message });
   }
 });
 
-// ========== SERVER START ==========
+// ========== SERVE FRONTEND ==========
 app.get("/ranai", (req, res) => {
   res.sendFile(path.join(__dirname, "../client/index.html"));
 });
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "../client/index.html"));
+});
 
+// ========== GLOBAL ERROR HANDLER ==========
+app.use((err, req, res, _next) => {
+  console.error("Unhandled error:", err.message);
+  res.status(500).json({ success: false, error: "Internal server error" });
+});
+
+// ========== START ==========
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`✅ Tavily AI ready`);
   console.log(`✅ DeepAI ready`);
   console.log(`✅ Gemini Vision ready`);
-  console.log(`📧 OTP sent via Resend (high deliverability, instant response)`);
-  console.log(`🔐 Login endpoint added`);
-  console.log(`💬 Local conversation & math handler active`);
+  console.log(`🔐 Google OAuth enabled | JWT auth active`);
+  console.log(`🧮 Math solver active | 🌐 Multilingual (EN/HI/Hinglish)`);
 });
