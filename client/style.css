@@ -1194,3 +1194,141 @@ a:hover { text-decoration: underline; }
   .input-tools { gap: 0; }
   .tool-btn   { padding: 5px 7px; }
 }
+/* ════════════════════════════════════════════════════
+   POLLINATIONS — Image Generation UI
+   ════════════════════════════════════════════════════ */
+
+/* Loading state */
+.img-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-2);
+  font-size: 13.5px;
+  padding: 4px 0;
+}
+
+.img-spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(16,163,127,0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: imgSpin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes imgSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* Generated image wrapper */
+.gen-img-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 340px;
+  width: 100%;
+}
+
+.gen-img {
+  width: 100%;
+  border-radius: var(--radius);
+  display: block;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.gen-img:hover {
+  transform: scale(1.01);
+  box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+}
+
+.gen-caption {
+  font-size: 12px;
+  color: var(--text-2);
+  font-style: italic;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+/* Action buttons row */
+.gen-img-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Download button */
+.img-dl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 7px 16px;
+  font-size: 12.5px;
+  font-family: var(--font);
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: opacity var(--transition), transform 0.15s, box-shadow 0.15s;
+  box-shadow: 0 3px 14px rgba(var(--accent-rgb),0.35);
+  white-space: nowrap;
+}
+
+.img-dl-btn:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+  box-shadow: 0 5px 18px rgba(var(--accent-rgb),0.45);
+  text-decoration: none;
+}
+
+.img-dl-btn:active {
+  transform: scale(0.97);
+}
+
+/* Copy Link button */
+.img-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface2);
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 14px;
+  font-size: 12.5px;
+  font-family: var(--font);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+  white-space: nowrap;
+}
+
+.img-copy-btn:hover {
+  background: var(--surface3);
+  color: var(--text);
+  border-color: rgba(255,255,255,0.15);
+}
+
+/* Error state */
+.poll-error {
+  color: #ff6b6b;
+  font-size: 13px;
+}
+
+/* Gen bubble padding tweak */
+.gen-bubble {
+  padding: 12px 14px !important;
+}
+
+/* Mobile */
+@media (max-width: 600px) {
+  .gen-img-wrap { max-width: 100%; }
+  .img-dl-btn, .img-copy-btn { font-size: 12px; padding: 6px 12px; }
+}
