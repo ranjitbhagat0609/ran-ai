@@ -429,6 +429,32 @@ async function sendMessageToAI(question) {
     addMessage('ai', getHumanResponse(question, lang));
     return;
   }
+
+  // ── PRIMARY: Pollinations Text API ──────────────────
+  const sysPrompt = lang === 'hi'
+    ? 'You are RanAI, a helpful AI assistant. Always reply ONLY in Hindi. Give long, detailed, well-structured answers in paragraphs. Never give one-line answers.'
+    : 'You are RanAI, a helpful AI assistant. Give long, detailed, thorough answers in well-structured paragraphs. Never give short or one-line answers.';
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    const polRes = await fetch(
+      `https://text.pollinations.ai/${encodeURIComponent(sysPrompt + '\n\nUser: ' + question)}`,
+      { signal: controller.signal }
+    );
+    clearTimeout(timer);
+    if (polRes.ok) {
+      const polAnswer = (await polRes.text()).trim();
+      if (polAnswer && polAnswer.length > 15) {
+        hideTyping();
+        addMessage('ai', polAnswer);
+        return;
+      }
+    }
+  } catch (polErr) {
+    console.warn('[Pollinations Text] failed:', polErr.message, '— using backend fallback');
+  }
+
+  // ── FALLBACK: existing backend ───────────────────────
   const modifiedQuestion = lang === 'hi' ? question + ' (कृपया हिंदी में उत्तर दें)' : question;
   try {
     const res  = await fetch(`${API}/ask`, {
@@ -457,6 +483,120 @@ async function translateText(text, targetLang) {
     if (data && data.responseData && data.responseData.translatedText) return data.responseData.translatedText;
   } catch (e) {}
   return text;
+}
+
+// ════════════════════════════════════════════
+// POLLINATIONS IMAGE GENERATION
+// ════════════════════════════════════════════
+
+function isImagePrompt(text) {
+  return /\b(draw|image|generate|photo|picture|create|make|paint|sketch|design|illustration)\b/i.test(text);
+}
+
+/** Show an AI message bubble with a spinner while image loads */
+function addImageLoadingBubble() {
+  const hero      = $('hero');
+  const container = $('chatMessages');
+  if (!container) return null;
+  if (hero && hero.style.display !== 'none') {
+    hero.style.display = 'none';
+    container.classList.add('show');
+    container.style.display = 'flex';
+  }
+  const row = document.createElement('div');
+  row.className = 'message-row ai';
+  const avatar = document.createElement('img');
+  avatar.className = 'message-avatar';
+  avatar.src = 'LOGO.png';
+  const bubble = document.createElement('div');
+  bubble.className = 'message-bubble gen-bubble';
+  bubble.innerHTML = `
+    <div class="img-loading">
+      <span class="img-spinner"></span>
+      <span>Generating image…</span>
+    </div>`;
+  row.appendChild(avatar);
+  row.appendChild(bubble);
+  container.appendChild(row);
+  scrollToBottom();
+  return bubble;
+}
+
+/** Replace loading bubble content with actual image + download */
+function fillImageBubble(bubble, imageUrl, prompt) {
+  bubble.innerHTML = `
+    <div class="gen-img-wrap">
+      <img class="gen-img" src="${imageUrl}" alt="${escapeHtml(prompt)}" />
+      <p class="gen-caption">🎨 ${escapeHtml(prompt)}</p>
+      <div class="gen-img-actions">
+        <a class="img-dl-btn" href="${imageUrl}" download="ranai-image.jpg" target="_blank" rel="noopener noreferrer">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          Download
+        </a>
+        <button class="img-copy-btn" onclick="copyImageUrl('${imageUrl}')">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <rect x="9" y="9" width="13" height="13" rx="2"/>
+            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+          </svg>
+          Copy Link
+        </button>
+      </div>
+    </div>`;
+  scrollToBottom();
+  // Save to conversation
+  if (currentConversationId) {
+    const conv = conversations.find(c => c.id === currentConversationId);
+    if (conv) {
+      conv.messages.push({ role: 'ai', text: `🖼️ Generated image: "${prompt}"` });
+      saveConversationsToLocalStorage();
+      renderConversationList();
+    }
+  }
+}
+
+function copyImageUrl(url) {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(url).then(() => showToast('Image link copied! 🔗'));
+  } else {
+    showToast('Copy not supported on this browser.');
+  }
+}
+
+async function handleImageGeneration(prompt) {
+  const bubble = addImageLoadingBubble();
+  const encoded = encodeURIComponent(prompt);
+  const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?nologo=true&width=768&height=512&seed=${Date.now()}`;
+
+  try {
+    // Wait for image to load with 12s timeout
+    await new Promise((resolve, reject) => {
+      const img = new Image();
+      const timer = setTimeout(() => { img.src = ''; reject(new Error('timeout')); }, 12000);
+      img.onload  = () => { clearTimeout(timer); resolve(); };
+      img.onerror = () => { clearTimeout(timer); reject(new Error('load error')); };
+      img.src = imageUrl;
+    });
+    if (bubble) fillImageBubble(bubble, imageUrl, prompt);
+  } catch (primaryErr) {
+    console.warn('[Pollinations Image] failed:', primaryErr.message, '— fallback to backend');
+    // Fallback: ask backend
+    try {
+      const res  = await fetch(`${API}/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: prompt, model: currentModel, lang: 'en' })
+      });
+      const data = await res.json();
+      if (bubble) bubble.innerHTML = renderMarkdown(data.reply || 'Could not generate image.');
+    } catch (fbErr) {
+      if (bubble) bubble.innerHTML = '<span class="poll-error">❌ Image generation failed. Please try again.</span>';
+    }
+    scrollToBottom();
+  }
 }
 
 async function sendImageToAI(imageFile, textQuery) {
@@ -555,7 +695,13 @@ async function handleSend() {
   }
   if (attachedFiles.length) { attachedFiles = []; renderAttachments(); }
   ta.value = ''; autoResizeTextarea();
-  if (msg) await sendMessageToAI(msg);
+  if (msg) {
+    if (isImagePrompt(msg)) {
+      await handleImageGeneration(msg);
+    } else {
+      await sendMessageToAI(msg);
+    }
+  }
 }
 
 function autoResizeTextarea() {
