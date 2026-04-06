@@ -2809,9 +2809,30 @@ app.post("/ask", async (req, res) => {
     return res.json({ success: true, reply: localReply });
   }
 
-  // 1.5 🧠 ChatGPT Brain (PRIMARY — GPT-4o by OpenAI, real ChatGPT level)
-  // Sabse pehle ChatGPT try hoga. Agar key set hai aur response aaya, wahi return hoga.
-  // Any language detect karke usi language me jawab deta hai automatically.
+  // 1.5 🌸 Pollinations Text API (PRIMARY — Free, No API Key, Long Detailed Answers)
+  // Local ke baad sabse pehle Pollinations try hoga. Long, detailed answers deta hai.
+  try {
+    const langInstruction = detectedLang === "hi"
+      ? "You are RanAI, a helpful AI assistant. Always reply ONLY in Hindi language. Give long, detailed, thorough answers in paragraphs. Cover all aspects. Never give short answers."
+      : "You are RanAI, a helpful AI assistant. Always give long, detailed, thorough, well-explained answers in multiple paragraphs. Cover all aspects of the topic. Never give short or one-line answers.";
+
+    const fullPrompt = `${langInstruction}\n\nUser question: ${question}`;
+    const polRes = await axios.get(
+      `https://text.pollinations.ai/${encodeURIComponent(fullPrompt)}`,
+      { timeout: 10000, responseType: "text" }
+    );
+    const polAnswer = (polRes.data || "").toString().trim();
+    if (polAnswer && polAnswer.length > 20) {
+      console.log("✅ Pollinations Text replied");
+      req.session.conversation.push({ role: "user", content: question });
+      req.session.conversation.push({ role: "assistant", content: polAnswer });
+      return res.json({ success: true, reply: polAnswer });
+    }
+  } catch (polErr) {
+    console.warn("⚠️ Pollinations Text failed:", polErr.message, "— trying ChatGPT…");
+  }
+
+  // 1.6 🧠 ChatGPT Brain (FALLBACK — GPT-4o by OpenAI)
   const chatgptReply = await buildChatGPTReply(question, conversationHistory);
   if (chatgptReply) {
     req.session.conversation.push({ role: "user", content: question });
@@ -2916,6 +2937,26 @@ app.post("/ask", async (req, res) => {
     res.json({ success: false, reply: fallback });
   }
 });
+
+// ADDED CODE START — Pollinations Image Generation Endpoint
+app.post("/generate-image", async (req, res) => {
+  const { prompt } = req.body;
+  if (!prompt || !prompt.trim()) {
+    return res.status(400).json({ success: false, error: "Prompt required" });
+  }
+  const encoded = encodeURIComponent(prompt.trim());
+  const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?nologo=true&width=768&height=512&seed=${Date.now()}`;
+  try {
+    // Verify image is reachable
+    await axios.head(imageUrl, { timeout: 8000 });
+    console.log("✅ Pollinations image generated:", imageUrl);
+    return res.json({ success: true, imageUrl });
+  } catch (err) {
+    console.error("❌ Pollinations image failed:", err.message);
+    return res.status(500).json({ success: false, error: "Image generation failed" });
+  }
+});
+// ADDED CODE END — Pollinations Image Generation Endpoint
 
 // ========== IMAGE ANALYSIS (unchanged, works with Gemini Vision) ==========
 async function getImageCaptionDeepAI(imageBuffer, mimeType) {
@@ -3024,6 +3065,7 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(OPENAI_API_KEY && OPENAI_API_KEY !== "YOUR_OPENAI_API_KEY_HERE" ? `✅ ChatGPT (GPT-4o) brain ACTIVE 🧠` : `⚠️  ChatGPT brain INACTIVE — OPENAI_API_KEY set nahi hai`);
+  console.log(`🌸 Pollinations AI ready (Text + Image — Free, No Key)`);
   console.log(`✅ Tavily AI ready`);
   console.log(`✅ DeepAI ready`);
   console.log(`✅ Gemini Vision ready`);
