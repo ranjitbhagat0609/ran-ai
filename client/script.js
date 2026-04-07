@@ -1,16 +1,16 @@
 'use strict';
 
-/* ════════════════════════════════════════════════════
-   RanAI – with Login/Signup + Voice Recording + Clear Chat
+/* ═══════════════════════════════════════════════════════════════════════
+   RanAI – with Login/Signup + Voice Recording + Clear Chat + Stop Voice + Edit Message
    No database – localStorage only
-════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 
 const $ = (id) => document.getElementById(id);
 
 // Backend URL
 const API = "https://ran-ai.onrender.com";
 
-// ── Global state ──────────────────────────────────────
+// ──── Global state ─────────────────────────────────────────────────────
 let currentUser          = null;
 let currentConversationId = null;
 let conversations        = [];
@@ -18,10 +18,11 @@ let attachedFiles        = [];
 let currentModel         = "RanAI 4o";
 let mediaRecognition     = null;
 let isRecording          = false;
+let shouldSpeakNextReply = false;
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    PARTICLE BACKGROUND
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 (function initParticles() {
   const canvas = $('particleCanvas');
   if (!canvas) return;
@@ -74,9 +75,9 @@ let isRecording          = false;
   draw();
 })();
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    TOAST & UTILS
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function showToast(msg, duration) {
   duration = duration || 2200;
   const existing = document.querySelector('.ranai-toast');
@@ -124,9 +125,9 @@ function scrollToBottom() {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    AUTH – Tab switch
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function switchTab(tab) {
   const loginForm  = $('loginForm');
   const signupForm = $('signupForm');
@@ -189,16 +190,16 @@ function setRule(el, ok, okText, failText) {
   el.classList.toggle('ok', ok);
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    AUTH – Validate email
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    AUTH – localStorage users
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function getStoredUsers() {
   try { return JSON.parse(localStorage.getItem('ranai_users') || '{}'); } catch { return {}; }
 }
@@ -206,9 +207,9 @@ function saveStoredUsers(users) {
   localStorage.setItem('ranai_users', JSON.stringify(users));
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    AUTH – Handle Login
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function handleLogin() {
   const email    = ($('loginEmail').value    || '').trim().toLowerCase();
   const password = ($('loginPassword').value || '');
@@ -230,9 +231,9 @@ function handleLogin() {
   loginSuccess(user);
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    AUTH – Handle Signup
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function handleSignup() {
   const firstName = ($('signupFirst').value  || '').trim();
   const lastName  = ($('signupLast').value   || '').trim();
@@ -270,9 +271,9 @@ function handleSignup() {
   loginSuccess(newUser);
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    AUTH – Login success
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function loginSuccess(user) {
   currentUser = user;
   localStorage.setItem('ranai_session', JSON.stringify({ email: user.email }));
@@ -299,9 +300,9 @@ function loginSuccess(user) {
   showToast('Welcome back, ' + user.firstName + '! 👋');
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    AUTH – Check saved session
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function checkSavedSession() {
   try {
     const session = JSON.parse(localStorage.getItem('ranai_session') || 'null');
@@ -314,9 +315,9 @@ function checkSavedSession() {
   } catch { return false; }
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    AUTH – Logout
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function logout() {
   localStorage.removeItem('ranai_session');
   currentUser = null;
@@ -338,14 +339,13 @@ function logout() {
   switchTab('login');
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    UPDATE USER UI
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function updateUserUI() {
   if (!currentUser) return;
   const displayName = currentUser.name || currentUser.firstName || 'User';
   const email       = currentUser.email || '';
-  // First name only for sidebar to save space
   const shortName   = currentUser.firstName || displayName;
 
   const sidebarName = $('sidebarUserName');
@@ -356,7 +356,6 @@ function updateUserUI() {
   if (ddName)  ddName.innerText  = displayName;
   if (ddEmail) ddEmail.innerText = email;
 
-  // Avatars — use first letter of first name
   const letter    = (currentUser.firstName || 'U').charAt(0).toUpperCase();
   const avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(letter)}&background=10a37f&color=fff`;
 
@@ -370,9 +369,9 @@ function updateUserUI() {
   if (ddAvatar) ddAvatar.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=10a37f&color=fff&size=80`;
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    TIME & LANGUAGE
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function getCurrentTimeInIndia() {
   const now = new Date();
   const ist = new Date(now.getTime() + 5.5*3600000);
@@ -381,87 +380,343 @@ function getCurrentTimeInIndia() {
   return { hours: h % 12 || 12, minutes: String(m).padStart(2,'0'), ampm };
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   ENHANCED LANGUAGE DETECTION
+═══════════════════════════════════════════════════════════════════════ */
+function normaliseHinglish(text) {
+  const map = [
+    [/\bkha\b/g,   'kahan'],
+    [/\bkr\b/g,    'kar'],
+    [/\bkrna\b/g,  'karna'],
+    [/\bkrte\b/g,  'karte'],
+    [/\bkrta\b/g,  'karta'],
+    [/\bbt\b/g,    'baat'],
+    [/\bbtao\b/g,  'batao'],
+    [/\bbtana\b/g, 'batana'],
+    [/\bh\b/g,     'hai'],
+    [/\bhn\b/g,    'hain'],
+    [/\brha\b/g,   'raha'],
+    [/\brhe\b/g,   'rahe'],
+    [/\bthk\b/g,   'theek'],
+    [/\bacha\b/g,  'accha'],
+    [/\bpls\b/g,   'please'],
+    [/\bplz\b/g,   'please'],
+    [/\bkyu\b/g,   'kyun'],
+    [/\bkyun\b/g,  'kyun'],
+    [/\bnhi\b/g,   'nahi'],
+    [/\bnai\b/g,   'nahi'],
+    [/\bhlo\b/g,   'hello'],
+    [/\bhii\b/g,   'hi'],
+    [/\bthx\b/g,   'thanks'],
+    [/\bthnks\b/g, 'thanks'],
+    [/\baap\b/g,   'aap'],
+    [/\bmujhe\b/g, 'mujhe'],
+    [/\bsmjh\b/g,  'samajh'],
+    [/\bsmjha\b/g, 'samjha'],
+  ];
+  let t = text.toLowerCase();
+  for (const [pat, rep] of map) t = t.replace(pat, rep);
+  return t;
+}
+
 function detectLanguage(text) {
   const t = text.trim();
   if (/[\u0900-\u097F]/.test(t)) return 'hi';
-  if (/\b(namaste|kaise ho|kya haal|kya chal|thik ho|bahut|mujhe|aap|main|kya baat|btao|shukriya|nahi|kyun|kab|kahan|kaun|mera|tera|hum|tum|bhai|dost|accha|theek)\b/i.test(t)) return 'hi';
+  if (/[\u0980-\u09FF]/.test(t)) return 'bn';
+  if (/[\u0B80-\u0BFF]/.test(t)) return 'ta';
+  if (/[\u0C00-\u0C7F]/.test(t)) return 'te';
+  if (/[\u0A80-\u0AFF]/.test(t)) return 'gu';
+  if (/[\u0A00-\u0A7F]/.test(t)) return 'pa';
+  if (/\b(namaste|kaise|kya|haal|chal|thik|bahut|mujhe|aap|main|btao|shukriya|dhanyawad|nahi|nhi|kyun|kab|kahan|kha|kaun|mera|tera|hum|tum|bhai|dost|accha|theek|yaar|yar|bol|bolo|kar|karo|kr|krna|hai|hain|tha|thi|the|raha|rahe|ho|hoga|bilkul|zaroor|arrey|arre|abhi|phir|warna|lekin|aur|matlab|samjha|smjh|lagta|lagti|chahiye|chahte|zyada|thoda|bohot|bahut|seedha|sidha|pata|baat|bt)\b/i.test(t))
+    return 'hi';
   return 'en';
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   HUMAN-LIKE RESPONSES (multi-language, Hinglish-aware)
+═══════════════════════════════════════════════════════════════════════ */
 function getHumanResponse(userMsg, lang) {
-  const lower = userMsg.toLowerCase().trim();
-  if (/kitna baj|time kya|baj raha|baj rhe|what time/.test(lower)) {
+  const lower   = userMsg.toLowerCase().trim();
+  const normed  = normaliseHinglish(lower);
+
+  if (/kitna baj|time kya|baj raha|baj rhe|what time|time batao|time bta/.test(normed)) {
     const { hours, minutes, ampm } = getCurrentTimeInIndia();
-    return lang === 'hi'
-      ? `अभी भारत में ${hours}:${minutes} ${ampm} बज रहे हैं। 😊 कुछ और पूछना है?`
-      : `It's currently ${hours}:${minutes} ${ampm} in India. 😊 Anything else?`;
+    const timeStr = `${hours}:${minutes} ${ampm}`;
+    if (lang === 'hi') return `अभी भारत में ${timeStr} बज रहे हैं। 😊 कुछ और पूछना है?`;
+    return `It's currently ${timeStr} in India. 😊 Anything else?`;
   }
-  if (/kya kar rahe|kya kr rhe|what are you doing/.test(lower)) {
-    const r = { hi: ["बस आपसे बात कर रहा हूँ! 😊", "आपकी मदद के लिए तैयार हूँ।"], en: ["Just chatting with you! 😊", "Ready to help!"] };
-    const list = r[lang] || r.en;
+
+  if (/kya kar rahe|kya kr rhe|what are you doing|kya karta/.test(normed)) {
+    const replies = {
+      hi:  ["बस आपसे बात कर रहा हूँ! 😊", "आपकी मदद के लिए तैयार हूँ यार।", "bas chill maar raha tha, tu bata kya scene hai? 😄"],
+      bn:  ["আপনার সাথে কথা বলছি! 😊"],
+      ta:  ["உங்களுடன் பேசுகிறேன்! 😊"],
+      en:  ["Just chatting with you! 😊", "Ready to help, always 💪", "Chilling and waiting for your next question 😄"],
+    };
+    const list = replies[lang] || replies.en;
     return list[Math.floor(Math.random() * list.length)];
   }
-  if (/^(hi|hello|hey|namaste|hlo|hii)/.test(lower)) {
-    const r = { hi: ["नमस्ते! 😊 मैं RanAi हूँ। कोई सवाल?", "हैलो! कैसे मदद करूँ?"], en: ["Hello! 👋 I'm RanAi. How can I help?", "Hey! 😊 Ask me anything!"] };
-    return (r[lang]||r.en)[Math.floor(Math.random() * 2)];
+
+  if (/^(hi|hello|hey|namaste|hlo|hii|hola|salaam|salam|vanakkam|namaskar|kem cho|sat sri akal|jai shri krishna|jai hind|ram ram)/.test(normed)) {
+    const replies = {
+      hi:  ["नमस्ते! 😊 मैं RanAi हूँ। कुछ पूछना है?", "हैलो यार! कैसे मदद करूँ? 😄", "अरे, आ गए! बोलो क्या चाहिए? 😊"],
+      bn:  ["নমস্কার! 😊 আমি RanAi। কীভাবে সাহায্য করতে পারি?"],
+      ta:  ["வணக்கம்! 😊 நான் RanAi. எப்படி உதவலாம்?"],
+      en:  ["Hello! 👋 I'm RanAi. How can I help?", "Hey! 😊 Ask me anything!", "Yo! What's up? I'm here to help 😄"],
+    };
+    const list = replies[lang] || replies.en;
+    return list[Math.floor(Math.random() * list.length)];
   }
-  if (/how are you|kaise ho|kya haal/.test(lower)) return lang==='hi' ? "बिल्कुल ठीक हूँ! आप कैसे हैं? 😊" : "Doing great, thanks! 😊";
-  if (/thank|shukriya|धन्यवाद/.test(lower)) return lang==='hi' ? "आपका स्वागत है! 😊" : "You're welcome! 😊";
-  if (/good morning|सुप्रभात/.test(lower)) return lang==='hi' ? "सुप्रभात! ☀️ आपका दिन शुभ हो।" : "Good morning! ☀️ Have a great day.";
-  if (/good night|शुभ रात्रि/.test(lower)) return lang==='hi' ? "शुभ रात्रि! 🌙" : "Good night! 🌙";
-  if (/(what is your name|your name|tumhara naam|aapka naam)/i.test(lower)) return lang==='hi' ? "मेरा नाम RanAi है।" : "My name is RanAi.";
-  if (/(who (made|created|built) you|tumko kisne banaya)/i.test(lower)) return lang==='hi' ? "मुझे **R@njit** ने बनाया है!" : "I was created by **R@njit**!";
-  if (/(i love you|love you|main tumse pyar)/i.test(lower)) return lang==='hi' ? "ओह! 😊 शुक्रिया! ❤️" : "Oh! 😊 Thank you! ❤️";
-  return lang==='hi' ? "मैं यहाँ हूँ! 😊 कुछ भी पूछ सकते हैं।" : "I'm here! 😊 Go ahead and ask me anything.";
+
+  if (/how are you|kaise ho|kya haal|kya chal|sab theek|thik ho|kaisa chal/.test(normed)) {
+    if (lang === 'hi') return "बिल्कुल ठीक हूँ यार! तू बता कैसा है? 😊";
+    if (lang === 'bn') return "আমি ভালো আছি! আপনি কেমন আছেন? 😊";
+    return "Doing great, thanks! You tell me? 😊";
+  }
+
+  if (/thank|shukriya|dhanyawad|धन्यवाद|nandri|dhanks/.test(normed)) {
+    if (lang === 'hi') return "अरे, इसमें क्या! आपका स्वागत है 😊";
+    if (lang === 'bn') return "স্বাগতম! 😊";
+    return "You're welcome! Anytime 😊";
+  }
+
+  if (/good morning|subah|suprabhat/.test(normed)) {
+    if (lang === 'hi') return "सुप्रभात! ☀️ आज का दिन बढ़िया जाए।";
+    return "Good morning! ☀️ Have a great day!";
+  }
+  if (/good night|shubh ratri/.test(normed)) {
+    if (lang === 'hi') return "शुभ रात्रि! 🌙 अच्छे सपने आएं।";
+    return "Good night! 🌙 Sweet dreams!";
+  }
+
+  if (/(what is your name|your name|tumhara naam|aapka naam|tera naam|naam kya|name kya)/i.test(normed)) {
+    if (lang === 'hi') return "मेरा नाम **RanAi** है — आपका दोस्त और AI assistant! 😊";
+    return "My name is **RanAi** — your smart AI friend! 😊";
+  }
+
+  if (/(who (made|created|built) you|tumko kisne banaya|kisne banaya|creator|developer)/i.test(normed)) {
+    if (lang === 'hi') return "मुझे **R@njit** ने बनाया है! 👨‍💻 Proud moment hai yaar!";
+    return "I was created by **R@njit**! 👨‍💻";
+  }
+
+  if (/(i love you|love you|main tumse pyar|pyar karta|mujhe pasand)/i.test(normed)) {
+    if (lang === 'hi') return "ओहो! 😊 शुक्रिया! ❤️ Yaar, AI se pyar? Lucky ho tum!";
+    return "Oh! 😊 Thank you! ❤️ That's sweet!";
+  }
+
+  if (/(bored|bore ho|kuch nahi|kya karu|pagal ho|dimag kharab)/i.test(normed)) {
+    if (lang === 'hi') return "Arrey bore mat ho yaar! Kuch interesting baat karte hain — koi topic batao 😄";
+    return "Don't be bored! Let's talk about something interesting 😄";
+  }
+
+  if (lang === 'hi') return "मैं यहाँ हूँ! 😊 कुछ भी पूछो, बताऊँगा।";
+  if (lang === 'bn') return "আমি এখানে আছি! 😊 যা ইচ্ছে জিজ্ঞেস করুন।";
+  if (lang === 'ta') return "நான் இங்கே இருக்கிறேன்! 😊 எதையும் கேளுங்கள்.";
+  return "I'm here! 😊 Go ahead and ask me anything.";
 }
 
-/* ════════════════════════════
-   AI & IMAGE
-════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════════
+   RANAI SYSTEM PROMPT (voice‑friendly)
+═══════════════════════════════════════════════════════════════════════ */
+const RANAI_SYSTEM_PROMPT = `
+You are RanAI, a smart voice assistant that speaks responses aloud using SpeechSynthesis.
+
+INPUT UNDERSTANDING
+- User input may have wrong spelling
+- It may be Hindi, Hinglish, or English
+- Sentences may be incomplete
+
+Understand the meaning, not grammar.
+Do NOT mention spelling corrections.
+
+VOICE OUTPUT OPTIMIZATION
+Your response will be spoken using SpeechSynthesis.
+
+So ALWAYS:
+- Use short sentences, 8 to 12 words
+- Use simple everyday language
+- Avoid complex words
+- Avoid symbols, markdown, or special characters
+- Avoid long paragraphs
+- Use commas for natural pauses
+- Make sentences easy to speak and listen
+
+IMPORTANT LANGUAGE RULE
+- If user speaks in Hindi, reply in Hindi
+- If user speaks in Hinglish, reply in Hinglish
+- If user speaks in English, reply in English
+- Prefer spoken Hindi words that sound natural aloud
+- Keep Hindi replies simple and conversational
+
+Examples:
+User: kya kr rha h
+Reply: bas kaam chal raha hai, tu bata kya kar raha hai
+
+User: samajh nahi aaya
+Reply: koi nahi, main simple tarike se samjhata hu
+
+STYLE
+- Talk like a real human
+- Friendly and natural
+- No robotic tone
+- No unnecessary emojis
+- No formatting
+
+MEMORY
+- Use previous messages context
+- Keep conversation natural
+
+GOAL
+Generate responses that sound natural when spoken aloud using SpeechSynthesis.
+`;
+
+function sanitizeSpeechText(text) {
+  return (text || '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/[`#>*_~]/g, '')
+    .replace(/\[(.*?)\]\((.*?)\)/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// ----- Enhanced voice selection with normal speed (1x) -----
+function pickBestVoice(lang, voices) {
+  if (!voices || !voices.length) return null;
+
+  if (lang === 'hi') {
+    return (
+      voices.find(v => /^hi(-|_)?IN$/i.test(v.lang)) ||
+      voices.find(v => /hindi/i.test(v.name)) ||
+      voices.find(v => /india/i.test(v.name)) ||
+      null
+    );
+  }
+
+  return (
+    voices.find(v => /^en(-|_)?IN$/i.test(v.lang)) ||
+    voices.find(v => /^en(-|_)?GB$/i.test(v.lang)) ||
+    voices.find(v => /^en(-|_)?US$/i.test(v.lang)) ||
+    voices.find(v => /english/i.test(v.name)) ||
+    null
+  );
+}
+
+function speakReply(text) {
+  if (!('speechSynthesis' in window) || !text) return;
+
+  const spokenText = sanitizeSpeechText(text);
+  if (!spokenText) return;
+
+  const synth = window.speechSynthesis;
+  const lang = detectLanguage(spokenText);
+
+  synth.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(spokenText);
+  utterance.lang = lang === 'hi' ? 'hi-IN' : 'en-IN';
+  utterance.rate = 1.0;   // Normal speed (1x)
+  utterance.pitch = 1.0;
+  utterance.volume = 1.0;
+
+  const speakNow = () => {
+    const voices = synth.getVoices();
+    const chosenVoice = pickBestVoice(lang, voices);
+    if (chosenVoice) {
+      utterance.voice = chosenVoice;
+      utterance.lang = chosenVoice.lang;
+    }
+    synth.speak(utterance);
+  };
+
+  const voices = synth.getVoices();
+  if (voices.length) {
+    speakNow();
+  } else {
+    const onVoicesChanged = () => {
+      synth.removeEventListener('voiceschanged', onVoicesChanged);
+      speakNow();
+    };
+    synth.addEventListener('voiceschanged', onVoicesChanged);
+  }
+}
+
+// ----- Stop / Skip Voice -----
+function stopVoice() {
+  if (window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+    showToast('Voice stopped', 1500);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   SEND MESSAGE TO AI (enhanced multi‑language + memory, faster)
+═══════════════════════════════════════════════════════════════════════ */
 async function sendMessageToAI(question) {
-  const lang  = detectLanguage(question);
-  const lower = question.toLowerCase().trim();
-  const isCasual = /kitna baj|time kya|baj raha|kya kar rahe|^(hi|hello|hey|hlo|hii|namaste)|how are you|kaise ho|thank|shukriya|good morning|good night|what is your name|who made you|i love you/i.test(lower);
+  const lang   = detectLanguage(question);
+  const normed = normaliseHinglish(question.toLowerCase().trim());
+
+  // Casual patterns – handle locally with minimal delay
+  const casualPattern = /kitna baj|time kya|baj raha|baj rhe|time batao|what time|kya kar rahe|kya kr rhe|what are you doing|^(hi|hello|hey|hlo|hii|namaste|salaam|salam|vanakkam)|how are you|kaise ho|kya haal|sab theek|thik ho|kaisa chal|thank|shukriya|dhanyawad|good morning|good night|subah|shubh ratri|what is your name|your name|tumhara naam|naam kya|who made you|kisne banaya|i love you|love you|main tumse pyar|bored|bore ho/i;
+
   showTyping();
-  if (isCasual) {
-    await sleep(600 + Math.random() * 400);
+
+  if (casualPattern.test(normed)) {
+    await sleep(150);  // Reduced from 500ms to 150ms for faster response
     hideTyping();
     addMessage('ai', getHumanResponse(question, lang));
     return;
   }
 
-  // ── PRIMARY: Pollinations Text API ──────────────────
-  const sysPrompt = lang === 'hi'
-    ? 'You are RanAI, a helpful AI assistant. Always reply ONLY in Hindi. Give long, detailed, well-structured answers in paragraphs. Never give one-line answers.'
-    : 'You are RanAI, a helpful AI assistant. Give long, detailed, thorough answers in well-structured paragraphs. Never give short or one-line answers.';
+  const conv = conversations.find(c => c.id === currentConversationId);
+  const history = conv ? conv.messages.slice(-6) : []; // Last 6 messages for context
+  const historyText = history.length > 1
+    ? history.slice(0, -1).map(m => `${m.role === 'user' ? 'User' : 'RanAI'}: ${m.text}`).join('\n')
+    : '';
+
+  const langSuffix = lang === 'hi'
+    ? '\n\nIMPORTANT: The user is speaking Hindi or Hinglish. Reply in natural spoken Hindi or Hinglish. Prefer Hindi when the user speaks Hindi. Use simple spoken words only.'
+    : lang !== 'en'
+    ? `\n\nIMPORTANT: Reply in the same language the user wrote in, detected language: ${lang}.`
+    : '\n\nIMPORTANT: Reply in simple spoken English.';
+
+  const fullSystemPrompt = RANAI_SYSTEM_PROMPT + langSuffix;
+  const userContent = historyText
+    ? `Previous context:\n${historyText}\n\nUser: ${question}`
+    : question;
+
+  // PRIMARY: Pollinations Text API with shorter timeout (3 seconds)
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10000);
+    const timer = setTimeout(() => controller.abort(), 3000); // 3s timeout
     const polRes = await fetch(
-      `https://text.pollinations.ai/${encodeURIComponent(sysPrompt + '\n\nUser: ' + question)}`,
+      `https://text.pollinations.ai/${encodeURIComponent(fullSystemPrompt + '\n\n' + userContent)}`,
       { signal: controller.signal }
     );
     clearTimeout(timer);
     if (polRes.ok) {
       const polAnswer = (await polRes.text()).trim();
-      if (polAnswer && polAnswer.length > 15) {
+      if (polAnswer && polAnswer.length > 5) {
         hideTyping();
         addMessage('ai', polAnswer);
         return;
       }
     }
   } catch (polErr) {
-    console.warn('[Pollinations Text] failed:', polErr.message, '— using backend fallback');
+    console.warn('[Pollinations Text] failed or slow:', polErr.message);
   }
 
-  // ── FALLBACK: existing backend ───────────────────────
+  // FALLBACK: backend API (fast)
   const modifiedQuestion = lang === 'hi' ? question + ' (कृपया हिंदी में उत्तर दें)' : question;
   try {
-    const res  = await fetch(`${API}/ask`, {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`${API}/ask`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: modifiedQuestion, model: currentModel, lang })
+      body: JSON.stringify({ question: modifiedQuestion, model: currentModel, lang }),
+      signal: controller.signal
     });
+    clearTimeout(timer);
     const data = await res.json();
     hideTyping();
     let answer = data.reply || 'Sorry, I encountered an error.';
@@ -471,29 +726,28 @@ async function sendMessageToAI(question) {
     addMessage('ai', answer);
   } catch (e) {
     hideTyping();
-    addMessage('ai', '🌐 Network error. Make sure the backend is running.');
+    addMessage('ai', '🌐 Network issue, please try again.');
   }
 }
 
 async function translateText(text, targetLang) {
   if (targetLang !== 'hi') return text;
   try {
-    const res  = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|hi`);
+    const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|hi`);
     const data = await res.json();
     if (data && data.responseData && data.responseData.translatedText) return data.responseData.translatedText;
   } catch (e) {}
   return text;
 }
 
-// ════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════
 // POLLINATIONS IMAGE GENERATION
-// ════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════
 
 function isImagePrompt(text) {
   return /\b(draw|image|generate|photo|picture|create|make|paint|sketch|design|illustration)\b/i.test(text);
 }
 
-/** Show an AI message bubble with a spinner while image loads */
 function addImageLoadingBubble() {
   const hero      = $('hero');
   const container = $('chatMessages');
@@ -522,7 +776,6 @@ function addImageLoadingBubble() {
   return bubble;
 }
 
-/** Replace loading bubble content with actual image + download */
 function fillImageBubble(bubble, imageUrl, prompt) {
   bubble.innerHTML = `
     <div class="gen-img-wrap">
@@ -547,7 +800,6 @@ function fillImageBubble(bubble, imageUrl, prompt) {
       </div>
     </div>`;
   scrollToBottom();
-  // Save to conversation
   if (currentConversationId) {
     const conv = conversations.find(c => c.id === currentConversationId);
     if (conv) {
@@ -572,30 +824,20 @@ async function handleImageGeneration(prompt) {
   const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?nologo=true&width=768&height=512&seed=${Date.now()}`;
 
   try {
-    // Wait for image to load with 12s timeout
     await new Promise((resolve, reject) => {
       const img = new Image();
-      const timer = setTimeout(() => { img.src = ''; reject(new Error('timeout')); }, 12000);
+      const timer = setTimeout(() => { img.src = ''; reject(new Error('timeout')); }, 8000); // 8s timeout
       img.onload  = () => { clearTimeout(timer); resolve(); };
       img.onerror = () => { clearTimeout(timer); reject(new Error('load error')); };
       img.src = imageUrl;
     });
     if (bubble) fillImageBubble(bubble, imageUrl, prompt);
   } catch (primaryErr) {
-    console.warn('[Pollinations Image] failed:', primaryErr.message, '— fallback to backend');
-    // Fallback: ask backend
-    try {
-      const res  = await fetch(`${API}/ask`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: prompt, model: currentModel, lang: 'en' })
-      });
-      const data = await res.json();
-      if (bubble) bubble.innerHTML = renderMarkdown(data.reply || 'Could not generate image.');
-    } catch (fbErr) {
-      if (bubble) bubble.innerHTML = '<span class="poll-error">❌ Image generation failed. Please try again.</span>';
-    }
+    console.warn('[Pollinations Image] failed:', primaryErr.message);
+    if (bubble) bubble.innerHTML = '<span class="poll-error">❌ Image generation failed. Please try again.</span>';
     scrollToBottom();
+  } finally {
+    shouldSpeakNextReply = false;
   }
 }
 
@@ -605,7 +847,7 @@ async function sendImageToAI(imageFile, textQuery) {
   formData.append('image', imageFile);
   if (textQuery && textQuery.trim()) formData.append('query', textQuery);
   try {
-    const res  = await fetch(`${API}/analyze`, { method: 'POST', body: formData });
+    const res = await fetch(`${API}/analyze`, { method: 'POST', body: formData });
     const data = await res.json();
     hideTyping();
     if (data.success) {
@@ -622,9 +864,9 @@ async function sendImageToAI(imageFile, textQuery) {
   }
 }
 
-/* ════════════════════════════
-   MESSAGES
-════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════════
+   MESSAGES – with edit support
+═══════════════════════════════════════════════════════════════════════ */
 function addMessage(role, text, saveToConversation) {
   if (saveToConversation === undefined) saveToConversation = true;
   const hero     = $('hero');
@@ -653,11 +895,38 @@ function addMessage(role, text, saveToConversation) {
   bubble.className = 'message-bubble';
   bubble.innerHTML = renderMarkdown(text);
 
+  // Add edit icon for user messages
+  if (role === 'user') {
+    const editIcon = document.createElement('span');
+    editIcon.className = 'edit-message-icon';
+    editIcon.innerHTML = '✏️';
+    editIcon.title = 'Edit message (double-click also works)';
+    editIcon.style.cssText = 'margin-left: 8px; cursor: pointer; font-size: 12px; opacity: 0.6; transition: 0.2s;';
+    editIcon.onmouseenter = () => editIcon.style.opacity = '1';
+    editIcon.onmouseleave = () => editIcon.style.opacity = '0.6';
+    editIcon.onclick = (e) => {
+      e.stopPropagation();
+      editUserMessage(row, bubble, text);
+    };
+    bubble.appendChild(editIcon);
+    
+    // Double-click to edit
+    bubble.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      editUserMessage(row, bubble, text);
+    });
+  }
+
   if (role === 'ai') { row.appendChild(avatar); row.appendChild(bubble); }
   else               { row.appendChild(bubble); row.appendChild(avatar); }
 
   container.appendChild(row);
   scrollToBottom();
+
+  if (role === 'ai' && shouldSpeakNextReply) {
+    speakReply(text);
+    shouldSpeakNextReply = false;
+  }
 
   if (saveToConversation && currentConversationId) {
     const conv = conversations.find(c => c.id === currentConversationId);
@@ -672,20 +941,87 @@ function addMessage(role, text, saveToConversation) {
   }
 }
 
+async function editUserMessage(row, bubble, oldText) {
+  // Create an input field to edit
+  const input = document.createElement('textarea');
+  input.value = oldText;
+  input.style.cssText = `
+    width: 100%;
+    background: rgba(0,0,0,0.05);
+    border: 1px solid #10a37f;
+    border-radius: 12px;
+    padding: 8px 12px;
+    font-family: inherit;
+    font-size: 14px;
+    resize: vertical;
+  `;
+  const originalContent = bubble.innerHTML;
+  bubble.innerHTML = '';
+  bubble.appendChild(input);
+  input.focus();
+  
+  const saveEdit = async () => {
+    const newText = input.value.trim();
+    if (newText && newText !== oldText) {
+      // Find the message in conversation and update it
+      const conv = conversations.find(c => c.id === currentConversationId);
+      if (conv) {
+        const msgIndex = conv.messages.findIndex(m => m.role === 'user' && m.text === oldText);
+        if (msgIndex !== -1) {
+          conv.messages[msgIndex].text = newText;
+          // Remove all subsequent messages (AI responses) because we'll resend
+          conv.messages = conv.messages.slice(0, msgIndex + 1);
+          saveConversationsToLocalStorage();
+          renderConversationList();
+          // Reload conversation to show updated messages
+          loadConversationMessages();
+          // Resend the edited message to AI
+          shouldSpeakNextReply = true;
+          await sendMessageToAI(newText);
+        } else {
+          // Fallback: just update bubble
+          bubble.innerHTML = renderMarkdown(newText);
+          if (conv && conv.messages[msgIndex]) conv.messages[msgIndex].text = newText;
+          saveConversationsToLocalStorage();
+        }
+      } else {
+        bubble.innerHTML = renderMarkdown(newText);
+      }
+    } else if (!newText) {
+      showToast('Message cannot be empty', 1500);
+      bubble.innerHTML = originalContent;
+    } else {
+      bubble.innerHTML = originalContent;
+    }
+  };
+  
+  input.addEventListener('blur', saveEdit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      saveEdit();
+    }
+  });
+}
+
 function showTyping() { const t = $('typingIndicator'); if (t) { t.style.display = 'flex'; scrollToBottom(); } }
 function hideTyping()  { const t = $('typingIndicator'); if (t) t.style.display = 'none'; }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    SEND HANDLER
-════════════════════════════ */
-async function handleSend() {
+═══════════════════════════════════════════════════════════════════════ */
+async function handleSend(fromVoice) {
+  if (fromVoice === undefined) fromVoice = false;
   const ta = $('msgTextarea');
   if (!ta) return;
   const msg = ta.value.trim();
   const hasImages = attachedFiles.some(f => f.type.startsWith('image/'));
   const hasOther  = attachedFiles.some(f => !f.type.startsWith('image/'));
   if (hasOther) showToast('Only image files can be analyzed. Others ignored.', 3000);
-  if (msg) addMessage('user', msg);
+  if (msg) {
+    shouldSpeakNextReply = fromVoice;
+    addMessage('user', msg);
+  }
   if (hasImages) {
     const imageFile = attachedFiles.find(f => f.type.startsWith('image/'));
     attachedFiles = []; renderAttachments();
@@ -731,9 +1067,9 @@ function renderAttachments() {
   });
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    VOICE RECORDING (Real Web Speech API)
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function initMic() {
   const micBtn    = $('micBtn');
   const voiceModal = $('voiceModal');
@@ -763,55 +1099,72 @@ function startRecording() {
   if (!SpeechRecognition) return;
 
   mediaRecognition = new SpeechRecognition();
-  mediaRecognition.continuous     = true;
+  mediaRecognition.continuous     = false;
   mediaRecognition.interimResults = true;
-  mediaRecognition.lang           = 'hi-IN,en-IN,en-US'; // Hindi + English support
+  mediaRecognition.lang           = 'hi-IN';
 
-  const voiceModal     = $('voiceModal');
+  const voiceModal      = $('voiceModal');
   const voiceTranscript = $('voiceTranscript');
-  const voiceLabel     = $('voiceLabel');
-  const micBtn         = $('micBtn');
+  const voiceLabel      = $('voiceLabel');
+  const micBtn          = $('micBtn');
 
-  if (voiceModal) voiceModal.style.display = 'flex';
-  if (voiceLabel) voiceLabel.innerText = 'Listening…';
-  if (voiceTranscript) voiceTranscript.innerText = 'Start speaking';
-  if (micBtn) micBtn.classList.add('recording');
+  if (voiceModal)      voiceModal.style.display  = 'flex';
+  if (voiceLabel)      voiceLabel.innerText       = 'Listening… bolo 🎙️';
+  if (voiceTranscript) voiceTranscript.innerText  = 'Start speaking';
+  if (micBtn)          micBtn.classList.add('recording');
 
   isRecording = true;
   let finalTranscript = '';
+  let interimTranscript = '';
 
   mediaRecognition.onresult = (event) => {
-    let interim = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
+    finalTranscript   = '';
+    interimTranscript = '';
+    for (let i = 0; i < event.results.length; i++) {
       const t = event.results[i][0].transcript;
       if (event.results[i].isFinal) finalTranscript += t;
-      else interim += t;
+      else interimTranscript += t;
     }
-    if (voiceTranscript) voiceTranscript.innerText = finalTranscript + interim || 'Listening…';
+    const display = (finalTranscript + interimTranscript).trim() || 'Listening…';
+    if (voiceTranscript) voiceTranscript.innerText = display;
   };
 
   mediaRecognition.onerror = (e) => {
+    isRecording = false;
     stopRecording();
-    if (e.error === 'not-allowed') showToast('Microphone permission denied.', 3000);
-    else showToast('Voice error: ' + e.error, 2500);
+    if (e.error === 'not-allowed' || e.error === 'permission-denied') {
+      showToast('Microphone permission denied. Please allow mic access.', 3500);
+    } else if (e.error === 'no-speech') {
+      showToast('No speech detected. Please speak clearly.', 2500);
+    } else if (e.error === 'network') {
+      showToast('Network error. Check your internet connection.', 3000);
+    } else {
+      showToast('Voice error: ' + e.error, 2500);
+    }
   };
 
   mediaRecognition.onend = () => {
-    if (isRecording) {
-      // Insert transcript into textarea
+    const text = (finalTranscript || interimTranscript).trim();
+    stopRecording();
+
+    if (text) {
       const ta = $('msgTextarea');
-      if (ta && finalTranscript.trim()) {
-        ta.value = finalTranscript.trim();
+      if (ta) {
+        ta.value = text;
         autoResizeTextarea();
+        // Auto-send immediately (no extra delay)
+        const sb = $('sendBtn');
+        if (sb) handleSend(true);
       }
-      stopRecording();
+    } else {
+      showToast('Kuch sun nahi aaya. Dobara try karo 🎙️', 2500);
     }
   };
 
   try {
     mediaRecognition.start();
   } catch (e) {
-    showToast('Could not start microphone.', 2500);
+    showToast('Microphone start nahi ho raha. Dobara try karo.', 2500);
     stopRecording();
   }
 }
@@ -828,9 +1181,9 @@ function stopRecording() {
   }
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    CLEAR CHAT
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function openClearModal() {
   const overlay = $('confirmOverlay');
   if (overlay) overlay.style.display = 'flex';
@@ -855,9 +1208,9 @@ function confirmClearChat() {
   }
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    CONVERSATIONS
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function saveConversationsToLocalStorage() {
   const key = 'ranai_convs_' + (currentUser ? currentUser.email : 'guest');
   localStorage.setItem(key, JSON.stringify(conversations));
@@ -910,7 +1263,7 @@ function loadConversationMessages() {
     msgs.classList.add('show');
     msgs.style.display = 'flex';
     scrollToBottom();
-  }
+  } 
 }
 
 function deleteConversation(id) {
@@ -978,9 +1331,9 @@ function initConversationEvents() {
   });
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    SIDEBAR
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function closeSidebarMobile() {
   const sidebar = $('sidebar');
   const overlay = $('sidebarOverlay');
@@ -1027,9 +1380,9 @@ function initSidebar() {
   initState();
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    MODEL DROPDOWN
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function initModelDropdown() {
   const modelPill    = $('modelPill');
   const modelDropdown = $('modelDropdown');
@@ -1063,9 +1416,9 @@ function initModelDropdown() {
   });
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    USER MENU
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function initUserMenu() {
   const userMenuBtn  = $('userMenuBtn');
   const userDropdown = $('userDropdown');
@@ -1097,9 +1450,9 @@ function initUserMenu() {
   });
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    ATTACHMENTS
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function initAttachments() {
   const attachBtn = $('attachBtn');
   if (!attachBtn) return;
@@ -1115,9 +1468,9 @@ function initAttachments() {
   });
 }
 
-/* ════════════════════════════
-   TOOL BUTTONS
-════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════════
+   TOOL BUTTONS – added Stop Voice button
+═══════════════════════════════════════════════════════════════════════ */
 function initToolBtns() {
   const webSearchBtn = $('webSearchBtn');
   const reasonBtn    = $('reasonBtn');
@@ -1137,17 +1490,33 @@ function initToolBtns() {
     } else showToast('Share coming soon!');
   });
 
-  // Clear chat button
   const clearChatBtn = $('clearChatBtn');
   if (clearChatBtn) clearChatBtn.addEventListener('click', openClearModal);
 
-  // Mic
+  // Add Stop Voice button (if not already present)
+  let stopVoiceBtn = $('stopVoiceBtn');
+  if (!stopVoiceBtn) {
+    const micBtn = $('micBtn');
+    if (micBtn && micBtn.parentNode) {
+      stopVoiceBtn = document.createElement('button');
+      stopVoiceBtn.id = 'stopVoiceBtn';
+      stopVoiceBtn.className = 'tool-btn';
+      stopVoiceBtn.innerHTML = '⏹️';
+      stopVoiceBtn.title = 'Stop voice output';
+      stopVoiceBtn.style.marginLeft = '8px';
+      stopVoiceBtn.addEventListener('click', stopVoice);
+      micBtn.parentNode.insertBefore(stopVoiceBtn, micBtn.nextSibling);
+    }
+  } else {
+    stopVoiceBtn.addEventListener('click', stopVoice);
+  }
+
   initMic();
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    EVENT LISTENERS
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 function initEventListeners() {
   const sendBtn    = $('sendBtn');
   const ta         = $('msgTextarea');
@@ -1169,13 +1538,11 @@ function initEventListeners() {
   if (newChatBtn) newChatBtn.addEventListener('click', () => newConversation());
 }
 
-/* ════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    INIT
-════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 window.onload = function() {
-  // Check if user already logged in
   if (checkSavedSession()) {
-    // Already logged in — skip auth screen
     const authScreen = $('authScreen');
     if (authScreen) authScreen.style.display = 'none';
     const main = $('main');
@@ -1191,13 +1558,11 @@ window.onload = function() {
     initEventListeners();
     initConversationEvents();
   } else {
-    // Show auth screen
     const authScreen = $('authScreen');
     if (authScreen) authScreen.style.display = 'flex';
     const main = $('main');
     if (main) main.style.display = 'none';
 
-    // Allow Enter key on auth forms
     document.addEventListener('keydown', e => {
       if (e.key === 'Enter') {
         const loginForm  = $('loginForm');
