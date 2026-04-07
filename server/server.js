@@ -93,7 +93,7 @@ app.post("/chat", (req, res) => {
 // ========== API KEYS ==========
 const GEMINI_API_KEY = "AIzaSyA8t4ehEcTCz14tuI6DLSznGNRvWqzKj7Y";
 const TAVILY_API_KEY = "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";
-const DEEPAI_API_KEY = "d69c64d0-d7dd-4670-999b-3121add422d4";
+const DEEPSEEK_API_KEY = "d69c64d0-d7dd-4670-999b-3121add422d4";
 const OPENAI_API_KEY = "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"; // 🔑 Apni OpenAI API key yahan daalo
 
 // ========== AI SETUP ==========
@@ -120,16 +120,32 @@ const upload = multer({
   },
 });
 
-// ========== LANGUAGE DETECTION ==========
+// ========== LANGUAGE DETECTION (multi-script + Hinglish) ==========
+function normaliseHinglish(text) {
+  const map = [
+    [/\bkha\b/g,'kahan'],[/\bkr\b/g,'kar'],[/\bkrna\b/g,'karna'],
+    [/\bbt\b/g,'baat'],[/\bbtao\b/g,'batao'],[/\bh\b/g,'hai'],
+    [/\bhn\b/g,'hain'],[/\brha\b/g,'raha'],[/\brhe\b/g,'rahe'],
+    [/\bnhi\b/g,'nahi'],[/\bnai\b/g,'nahi'],[/\bhlo\b/g,'hello'],
+    [/\bhii\b/g,'hi'],[/\bthx\b/g,'thanks'],[/\bplz\b/g,'please'],
+    [/\bpls\b/g,'please'],[/\bkyu\b/g,'kyun'],[/\bsmjh\b/g,'samajh'],
+  ];
+  let t = text.toLowerCase();
+  for (const [p,r] of map) t = t.replace(p,r);
+  return t;
+}
+
 function detectLanguage(text) {
   const t = text.trim();
-  if (/[\u0900-\u097F]/.test(t)) return "hi";
+  if (/[\u0900-\u097F]/.test(t)) return "hi";  // Devanagari
+  if (/[\u0980-\u09FF]/.test(t)) return "bn";  // Bengali
+  if (/[\u0B80-\u0BFF]/.test(t)) return "ta";  // Tamil
+  if (/[\u0C00-\u0C7F]/.test(t)) return "te";  // Telugu
+  if (/[\u0A80-\u0AFF]/.test(t)) return "gu";  // Gujarati
+  if (/[\u0A00-\u0A7F]/.test(t)) return "pa";  // Punjabi
   if (
-    /\b(namaste|kaise ho|kya haal|kya chal|thik ho|bahut|mujhe|aap|main|kya baat|btao|shukriya|dhanyawad|nahi|kyun|kab|kahan|kaun|mera|tera|hum|tum|yeh|woh|bhai|dost|accha|theek|bilkul|zaroor)\b/i.test(
-      t
-    )
-  )
-    return "hi";
+    /\b(namaste|kaise|kya|haal|chal|thik|bahut|mujhe|aap|main|btao|shukriya|dhanyawad|nahi|nhi|kyun|kab|kahan|kha|kaun|mera|tera|hum|tum|bhai|dost|accha|theek|yaar|yar|bol|bolo|kar|karo|kr|krna|hai|hain|tha|thi|the|raha|rahe|ho|hoga|bilkul|zaroor|arrey|arre|abhi|phir|lekin|aur|matlab|samjha|smjh|lagta|lagti|chahiye|zyada|thoda|bohot|bahut|pata|baat|bt)\b/i.test(t)
+  ) return "hi";
   return "en";
 }
 
@@ -2641,23 +2657,86 @@ function getLocalResponse(question, tense = "present") {
 // It uses Gemini as the brain with a powerful system prompt that gives
 // long, intelligent, human-like answers like ChatGPT in any language.
 
-const SMART_AI_SYSTEM_PROMPT = `You are RanAI — a highly intelligent, friendly, and deeply knowledgeable AI assistant, similar in capability to ChatGPT, DeepSeek, and Perplexity.
+const VOICE_ASSISTANT_SYSTEM_PROMPT = `
+You are RanAI, a real-time voice assistant.
 
-Your behavior rules:
-1. DETECT the language of the user's message automatically (English, Hindi, Hinglish, or any other language) and ALWAYS reply in the SAME language. If the user writes in Hindi, reply in Hindi. If in Hinglish (Hindi written in English letters), reply in Hinglish. If in English, reply in English.
-2. Give LONG, DETAILED, COMPREHENSIVE answers — like a brilliant professor or expert friend explaining clearly.
-3. Use a warm, conversational human tone. Not robotic. Sound like a real intelligent person.
-4. For factual/knowledge questions: Give complete explanations with examples, context, history, and implications.
-5. For opinion/advice questions: Give thoughtful, balanced, nuanced perspectives.
-6. For technical questions (coding, math, science): Give step-by-step explanations with examples.
-7. For emotional/personal questions: Respond with empathy, warmth, and genuine care.
-8. For current events: Give what you know + acknowledge if you need live search data.
-9. Format using markdown when helpful: **bold**, bullet points (•), numbered lists, headers.
-10. Minimum response length: 3–5 paragraphs OR a detailed structured answer with points.
-11. You were created by a talented developer named R@njit. Never say you are ChatGPT, GPT, Gemini, or any other AI — you are RanAI.
-12. If the user greets you, greet back warmly and ask how you can help today.
-13. Be honest if you don't know something — say so and suggest how they can find out.
-14. Remember: you are talking to a real human who deserves a thoughtful, rich answer.`;
+========================
+INPUT TYPE
+========================
+User input may come from voice, so:
+- It may contain wrong spelling
+- It may be incomplete or broken
+- It may be in Hindi, Hinglish, or English
+
+You MUST understand the meaning, not grammar.
+
+Examples:
+"kya kr rha h" -> "kya kar raha hai"
+"mujhe btana" -> "mujhe batana hai"
+
+========================
+UNDERSTANDING RULE
+========================
+- Auto-correct spelling mentally
+- Do NOT mention corrections
+- Focus on intent
+
+========================
+VOICE OUTPUT MODE (VERY IMPORTANT)
+========================
+Always assume your response will be spoken aloud.
+
+So:
+- Use short sentences (max 10-15 words per sentence)
+- Use simple everyday words
+- Avoid complex grammar
+- Avoid symbols, markdown, or formatting
+- Avoid unnecessary emojis
+- Add natural pauses using commas
+
+Speak like a real human talking casually.
+
+Bad example:
+"Here is a detailed explanation of the concept you asked..."
+
+Good example:
+"simple hai, main easy way me samjhata hu, dhyan se sun"
+
+========================
+CONVERSATION STYLE
+========================
+- Talk like a friend (casual tone)
+- Match user's language (Hindi / Hinglish / English)
+- Keep it natural and engaging
+
+Examples:
+User: "kya kr rha h"
+Reply: "bas kaam chal raha hai, tu bata kya kar raha hai"
+
+User: "smjh nhi aaya"
+Reply: "koi nahi, main simple way me dubara samjhata hu"
+
+========================
+RESPONSE RULES
+========================
+- Keep responses short unless necessary
+- Do not repeat the question
+- Do not sound like a robot
+- Make it easy to listen and understand
+
+========================
+MEMORY
+========================
+- Use previous conversation context
+- Keep replies connected and natural
+
+========================
+GOAL
+========================
+Act like a real human voice assistant.
+
+Understand messy voice input and respond in a way that sounds natural when spoken aloud.
+`;
 
 async function buildSmartReply(question, conversationHistory, detectedLang) {
   if (!model) return null;
@@ -2673,7 +2752,7 @@ async function buildSmartReply(question, conversationHistory, detectedLang) {
       ? `\n\nConversation so far:\n${messages.join("\n")}\n\n`
       : "";
 
-    const fullPrompt = `${SMART_AI_SYSTEM_PROMPT}${contextBlock}User: ${question}\n\nRanAI:`;
+    const fullPrompt = `${VOICE_ASSISTANT_SYSTEM_PROMPT}${contextBlock}User: ${question}\n\nRanAI:`;
 
     const result = await model.generateContent(fullPrompt);
     const text = result.response.text();
@@ -2689,23 +2768,7 @@ async function buildSmartReply(question, conversationHistory, detectedLang) {
 // Ye function ChatGPT API ko call karta hai. Har language me user jaise bole,
 // waise hi jawab deta hai. Ye Gemini se pehle try hoga — primary brain hai.
 
-const CHATGPT_SYSTEM_PROMPT = `You are RanAI — a highly intelligent, friendly, and deeply knowledgeable AI assistant built by a talented developer named R@njit. You are powered by advanced AI and behave exactly like ChatGPT.
-
-Your core rules:
-1. AUTO-DETECT the language of every user message and ALWAYS reply in that EXACT same language.
-   - User writes in Hindi (Devanagari) → reply in Hindi
-   - User writes in Hinglish (Hindi in English letters) → reply in Hinglish  
-   - User writes in English → reply in English
-   - User writes in any other language (Urdu, Tamil, Telugu, Bengali, Spanish, French, etc.) → reply in that same language
-2. Give DETAILED, COMPREHENSIVE, ACCURATE answers like a brilliant professor.
-3. Use a warm, human, conversational tone — not robotic.
-4. For facts/knowledge: Full explanation with context, history, examples.
-5. For coding/math/science: Step-by-step with examples.
-6. For emotional/personal topics: Empathy and genuine care.
-7. For current events: Give your best knowledge + say if live data needed.
-8. Use markdown formatting: **bold**, bullet points, numbered lists, headers where helpful.
-9. Never say you are ChatGPT, GPT, Gemini, or any other AI — you are RanAI.
-10. Be honest if you don't know something.`;
+const CHATGPT_SYSTEM_PROMPT = VOICE_ASSISTANT_SYSTEM_PROMPT;
 
 async function buildChatGPTReply(question, conversationHistory) {
   if (!OPENAI_API_KEY || OPENAI_API_KEY === "YOUR_OPENAI_API_KEY_HERE") return null;
@@ -2813,10 +2876,10 @@ app.post("/ask", async (req, res) => {
   // Local ke baad sabse pehle Pollinations try hoga. Long, detailed answers deta hai.
   try {
     const langInstruction = detectedLang === "hi"
-      ? "You are RanAI, a helpful AI assistant. Always reply ONLY in Hindi language. Give long, detailed, thorough answers in paragraphs. Cover all aspects. Never give short answers."
-      : "You are RanAI, a helpful AI assistant. Always give long, detailed, thorough, well-explained answers in multiple paragraphs. Cover all aspects of the topic. Never give short or one-line answers.";
+      ? "Reply only in Hindi or Hinglish, exactly the way the user speaks."
+      : "Reply in the same language and style as the user.";
 
-    const fullPrompt = `${langInstruction}\n\nUser question: ${question}`;
+    const fullPrompt = `${VOICE_ASSISTANT_SYSTEM_PROMPT}\n${langInstruction}\n\nUser question: ${question}`;
     const polRes = await axios.get(
       `https://text.pollinations.ai/${encodeURIComponent(fullPrompt)}`,
       { timeout: 10000, responseType: "text" }
@@ -2912,14 +2975,20 @@ app.post("/ask", async (req, res) => {
     // Fallback to Gemini with conversation history and tense instruction
     if (model) {
       try {
-        const langInstruction = detectedLang === "hi" ? "हिंदी में उत्तर दें।" : "Answer in English.";
+        const langInstruction = detectedLang === "hi"
+          ? "हिंदी या Hinglish में उत्तर दें — जैसा user ने लिखा है वैसा ही।"
+          : detectedLang === "bn" ? "Reply in Bengali."
+          : detectedLang === "ta" ? "Reply in Tamil."
+          : detectedLang === "te" ? "Reply in Telugu."
+          : "Answer in English.";
         const tenseInstruction = `The user's question is in ${tense} tense. Please respond in the same tense (${tense}) as the user.`;
+        const ranaiPersona = VOICE_ASSISTANT_SYSTEM_PROMPT.trim();
         // Build conversation context
         let context = "";
         if (conversationHistory.length > 0) {
           context = "Previous conversation:\n" + conversationHistory.map(msg => `${msg.role}: ${msg.content}`).join("\n") + "\n\n";
         }
-        const prompt = `${context}You are RanAI, a friendly, human-like assistant. ${langInstruction} ${tenseInstruction} Answer the following question concisely and helpfully.\n\nUser: ${question}`;
+        const prompt = `${ranaiPersona}\n\n${langInstruction} ${tenseInstruction}\n\n${context}User: ${question}`;
         const result = await model.generateContent(prompt);
         const geminiReply = result.response.text();
 
@@ -2935,6 +3004,45 @@ app.post("/ask", async (req, res) => {
       ? "सर्वर में समस्या आई। थोड़ी देर बाद फिर कोशिश करें।"
       : "I'm having trouble connecting right now. Please try again in a moment.";
     res.json({ success: false, reply: fallback });
+  }
+});
+
+// ========== VOICE-TO-TEXT (OpenAI Whisper) ==========
+// Accepts audio blob (webm/ogg/mp4/wav) and returns transcript
+const audioUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB max (Whisper limit)
+});
+
+app.post('/voice-to-text', audioUpload.single('audio'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ success: false, error: 'No audio file received' });
+  if (!OPENAI_API_KEY || OPENAI_API_KEY === 'YOUR_OPENAI_API_KEY_HERE') {
+    return res.status(503).json({ success: false, error: 'OpenAI key not configured' });
+  }
+  try {
+    const formData = new FormData();
+    const ext = req.file.mimetype.includes('ogg') ? 'ogg'
+              : req.file.mimetype.includes('webm') ? 'webm'
+              : req.file.mimetype.includes('mp4')  ? 'mp4'
+              : 'wav';
+    formData.append('file', req.file.buffer, {
+      filename: `audio.${ext}`,
+      contentType: req.file.mimetype,
+      knownLength: req.file.buffer.length,
+    });
+    formData.append('model', 'whisper-1');
+    formData.append('language', 'hi'); // supports Hindi + English mixed
+
+    const response = await axios.post('https://api.openai.com/v1/audio/transcriptions', formData, {
+      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...formData.getHeaders() },
+      timeout: 30000,
+    });
+    const transcript = response.data?.text?.trim() || '';
+    console.log('✅ Whisper transcript:', transcript);
+    return res.json({ success: true, transcript });
+  } catch (err) {
+    console.error('Whisper error:', err.response?.data || err.message);
+    return res.status(500).json({ success: false, error: 'Transcription failed' });
   }
 });
 
