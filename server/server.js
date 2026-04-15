@@ -3154,6 +3154,78 @@ app.post("/analyze", upload.single("image"), async (req, res) => {
   }
 });
 
+// ========== 🌦️ LIVE WEATHER (Free, Fast) ==========
+// GET /weather?city=CityName
+app.get("/weather", async (req, res) => {
+  const city = req.query.city;
+  if (!city || !city.trim()) {
+    return res.status(400).json({ error: "City name required. Example: /weather?city=Mumbai" });
+  }
+  try {
+    // Using wttr.in – no API key, returns JSON, fast (<2 sec)
+    const url = `https://wttr.in/${encodeURIComponent(city.trim())}?format=j1`;
+    const response = await axios.get(url, { timeout: 8000 });
+    const data = response.data;
+    if (!data || !data.current_condition || !data.current_condition[0]) {
+      return res.status(500).json({ error: "Weather data not available" });
+    }
+    const current = data.current_condition[0];
+    const location = data.nearest_area?.[0]?.areaName?.[0]?.value || city;
+    const region = data.nearest_area?.[0]?.region?.[0]?.value || "";
+    const country = data.nearest_area?.[0]?.country?.[0]?.value || "";
+    const weatherDesc = current.weatherDesc?.[0]?.value || "Unknown";
+    const tempC = current.temp_C;
+    const feelsLikeC = current.FeelsLikeC;
+    const humidity = current.humidity;
+    const windSpeedKmph = current.windspeedKmph;
+    const pressure = current.pressure;
+    const uvIndex = current.uvIndex;
+    const visibility = current.visibility;
+    const sunrise = data.weather?.[0]?.astronomy?.[0]?.sunrise || "";
+    const sunset = data.weather?.[0]?.astronomy?.[0]?.sunset || "";
+
+    const result = {
+      success: true,
+      location: `${location}, ${region} ${country}`.trim(),
+      weather: weatherDesc,
+      temperature_c: tempC,
+      feels_like_c: feelsLikeC,
+      humidity: `${humidity}%`,
+      wind_speed_kmph: windSpeedKmph,
+      pressure_hpa: pressure,
+      uv_index: uvIndex,
+      visibility_km: visibility,
+      sunrise,
+      sunset,
+      timestamp: new Date().toISOString()
+    };
+    res.json(result);
+  } catch (err) {
+    console.error("Weather API error:", err.message);
+    res.status(500).json({ error: "Failed to fetch weather. Check city name or try again." });
+  }
+});
+
+// ========== 🕒 INDIA TIME & DATE (Enhanced) ==========
+// GET /time – returns current IST date, time, timezone, timestamp
+app.get("/time", (req, res) => {
+  const { formatted, timezone } = getIndiaRealTime();
+  const now = new Date();
+  const istOptions = { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" };
+  const dateIST = now.toLocaleDateString("en-IN", istOptions);
+  const timeIST = now.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
+  const epoch = now.getTime();
+  res.json({
+    success: true,
+    date: dateIST,
+    time: timeIST,
+    full: formatted,
+    timezone: timezone,
+    timestamp: epoch,
+    iso: now.toISOString()
+  });
+});
+
 // ========== SERVE FRONTEND ==========
 app.get("/ranai", (req, res) => {
   res.sendFile(path.join(__dirname, "../client/index.html"));
@@ -3184,4 +3256,6 @@ app.listen(PORT, () => {
   console.log(`🔟 10-point internet answers enabled`);
   console.log(`🌐 Multilingual (EN/HI/Hinglish)`);
   console.log(`📚 Loaded ${Object.keys(conversationalData).length} conversational Q&A pairs`);
+  console.log(`🌦️ Live weather endpoint: GET /weather?city=CityName`);
+  console.log(`🕒 India time endpoint: GET /time`);
 });
