@@ -2848,17 +2848,31 @@ async function buildChatGPTReply(question, conversationHistory) {
 
 // ========== /ask ENDPOINT (with conversation, tense, 10-point answers) ==========
 app.post("/ask", async (req, res) => {
-  const { question, lang } = req.body;
+  const { question, lang, history: clientHistory } = req.body;
   if (!question || !question.trim()) {
     return res.json({ success: false, reply: "कृपया कुछ पूछें!" });
   }
 
-  // Initialize conversation memory if not exists
+  // Initialize session conversation memory if not exists
   if (!req.session.conversation) {
     req.session.conversation = [];
   }
-  // Keep last 6 exchanges (3 user + 3 assistant)
-  const conversationHistory = req.session.conversation.slice(-6);
+
+  // ── Merge: prefer client-sent history (more accurate), fallback to session ──
+  // Client sends the actual conversation array; session is a backup.
+  let conversationHistory;
+  if (clientHistory && Array.isArray(clientHistory) && clientHistory.length > 0) {
+    // Use client history (last 10 messages), normalize roles
+    conversationHistory = clientHistory.slice(-10).map(m => ({
+      role: m.role === "user" ? "user" : "assistant",
+      content: m.content || ""
+    }));
+    // Sync back to session so session stays up-to-date
+    req.session.conversation = conversationHistory.slice();
+  } else {
+    // Fallback to session memory
+    conversationHistory = req.session.conversation.slice(-10);
+  }
 
   const detectedLang = lang || detectLanguage(question);
   const tense = detectTense(question);
@@ -2873,13 +2887,21 @@ app.post("/ask", async (req, res) => {
   }
 
   // 1.5 🌸 Pollinations Text API (PRIMARY — Free, No API Key, Long Detailed Answers)
-  // Local ke baad sabse pehle Pollinations try hoga. Long, detailed answers deta hai.
+  // Conversation history bhi bhejte hain taaki Pollinations bhi pichli baatein yaad rakhe.
   try {
     const langInstruction = detectedLang === "hi"
       ? "Reply only in Hindi or Hinglish, exactly the way the user speaks."
       : "Reply in the same language and style as the user.";
 
-    const fullPrompt = `${VOICE_ASSISTANT_SYSTEM_PROMPT}\n${langInstruction}\n\nUser question: ${question}`;
+    // Build history block for Pollinations
+    let historyBlock = "";
+    if (conversationHistory.length > 0) {
+      historyBlock = "\n\nConversation so far:\n" +
+        conversationHistory.map(m => `${m.role === "user" ? "User" : "RanAI"}: ${m.content}`).join("\n") +
+        "\n";
+    }
+
+    const fullPrompt = `${VOICE_ASSISTANT_SYSTEM_PROMPT}\n${langInstruction}${historyBlock}\nUser question: ${question}`;
     const polRes = await axios.get(
       `https://text.pollinations.ai/${encodeURIComponent(fullPrompt)}`,
       { timeout: 10000, responseType: "text" }
