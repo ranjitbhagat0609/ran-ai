@@ -7,7 +7,6 @@
 
 const $ = (id) => document.getElementById(id);
 
-// Backend URL (make sure it's correct)
 const API = "https://ran-ai.onrender.com";
 
 // ──── Global state ─────────────────────────────────────────────────────
@@ -233,6 +232,97 @@ function saveStoredUsers(users) {
   _lsSet('ranai_users', JSON.stringify(users));
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   PERSISTENT MEMORY SYSTEM
+   - saveMessage(role, text)  — saves to per-user memory (max 10 pairs)
+   - loadMemory()             — returns array of {role,text} objects
+   - clearMemory()            — wipes all stored memory for current user
+   - getMemoryKey()           — computes the localStorage key
+   - buildMemoryPrompt()      — formats memory as prompt context string
+═══════════════════════════════════════════════════════════════════════ */
+
+function getMemoryKey() {
+  const email = currentUser ? currentUser.email : 'guest';
+  return 'ranai_memory_' + email;
+}
+
+/**
+ * Load the last 10 conversation pairs from persistent memory.
+ * Returns an array of { role: 'user'|'ai', text: string } objects.
+ */
+function loadMemory() {
+  try {
+    const raw = _lsGet(getMemoryKey());
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(m => m && typeof m.role === 'string' && typeof m.text === 'string');
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Save a single message to persistent memory.
+ * Prevents duplicate consecutive entries. Keeps max 20 entries (10 pairs).
+ */
+function saveMessage(role, text) {
+  if (!text || typeof text !== 'string') return;
+  const cleanText = text.trim();
+  if (!cleanText) return;
+
+  const memory = loadMemory();
+
+  // Prevent duplicate consecutive entry
+  if (memory.length > 0) {
+    const last = memory[memory.length - 1];
+    if (last.role === role && last.text === cleanText) return;
+  }
+
+  memory.push({ role, text: cleanText, ts: Date.now() });
+
+  // Keep only last 20 entries (10 user+ai pairs)
+  const trimmed = memory.slice(-20);
+
+  try {
+    _lsSet(getMemoryKey(), JSON.stringify(trimmed));
+  } catch {
+    // If storage quota exceeded, drop oldest half and retry
+    try {
+      _lsSet(getMemoryKey(), JSON.stringify(trimmed.slice(-10)));
+    } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Clear all memory for the current user.
+ */
+function clearMemory() {
+  _lsRemove(getMemoryKey());
+}
+
+/**
+ * Build a concise memory context string to inject into the AI prompt.
+ * Uses user's name for personalisation if available.
+ */
+function buildMemoryPrompt() {
+  const memory = loadMemory();
+  if (!memory.length) return '';
+
+  const userName = currentUser ? (currentUser.firstName || currentUser.name || '') : '';
+  const nameHint = userName ? `The user's name is ${userName}. ` : '';
+
+  const lines = memory.map(m => {
+    const label = m.role === 'user' ? (userName || 'User') : 'RanAI';
+    return `${label}: ${m.text}`;
+  }).join('\n');
+
+  return `\n\n--- MEMORY (previous conversations) ---\n${nameHint}${lines}\n--- END MEMORY ---`;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   AUTH HANDLERS
+═══════════════════════════════════════════════════════════════════════ */
 function handleLogin() {
   const email    = ($('loginEmail').value    || '').trim().toLowerCase();
   const password = ($('loginPassword').value || '');
@@ -291,6 +381,9 @@ function handleSignup() {
 function loginSuccess(user) {
   currentUser = user;
   _lsSet('ranai_session', JSON.stringify({ email: user.email }));
+
+  // Persist user name in memory profile for context awareness
+  _lsSet('ranai_user_name_' + user.email, user.firstName || user.name || '');
 
   const authScreen = $('authScreen');
   authScreen.style.transition = 'opacity 0.4s';
@@ -461,11 +554,13 @@ function getHumanResponse(userMsg, lang) {
   }
 
   if (/^(hi|hello|hey|namaste|hlo|hii|hola|salaam|salam|vanakkam|namaskar|kem cho|sat sri akal|jai shri krishna|jai hind|ram ram)/.test(normed)) {
+    const userName = currentUser ? (currentUser.firstName || '') : '';
+    const nameGreet = userName ? `, ${userName}` : '';
     const replies = {
-      hi:  ["नमस्ते! 😊 मैं RanAi हूँ। कुछ पूछना है?", "हैलो यार! कैसे मदद करूँ? 😄", "अरे, आ गए! बोलो क्या चाहिए? 😊"],
-      bn:  ["নমস্কার! 😊 আমি RanAi। কীভাবে সাহায্য করতে পারি?"],
-      ta:  ["வணக்கம்! 😊 நான் RanAi. எப்படி உதவலாம்?"],
-      en:  ["Hello! 👋 I'm RanAi. How can I help?", "Hey! 😊 Ask me anything!", "Yo! What's up? I'm here to help 😄"],
+      hi:  [`नमस्ते${nameGreet}! 😊 मैं RanAi हूँ। कुछ पूछना है?`, `हैलो यार${nameGreet}! कैसे मदद करूँ? 😄`, `अरे${nameGreet}, आ गए! बोलो क्या चाहिए? 😊`],
+      bn:  [`নমস্কার${nameGreet}! 😊 আমি RanAi। কীভাবে সাহায্য করতে পারি?`],
+      ta:  [`வணக்கம்${nameGreet}! 😊 நான் RanAi. எப்படி உதவலாம்?`],
+      en:  [`Hello${nameGreet}! 👋 I'm RanAi. How can I help?`, `Hey${nameGreet}! 😊 Ask me anything!`, `Yo${nameGreet}! What's up? I'm here to help 😄`],
     };
     const list = replies[lang] || replies.en;
     return list[Math.floor(Math.random() * list.length)];
@@ -551,6 +646,7 @@ STYLE
 MEMORY
 - Use previous messages context
 - Keep conversation natural
+- Address the user by their name when appropriate
 
 GOAL
 Generate responses that sound natural when spoken aloud using SpeechSynthesis.
@@ -684,7 +780,7 @@ async function fetchWithRetry(url, options, maxRetries = 3, baseDelay = 1000) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   SEND MESSAGE TO AI – with retries and detailed error messages
+   SEND MESSAGE TO AI – with memory injection and retries
 ═══════════════════════════════════════════════════════════════════════ */
 async function sendMessageToAI(question) {
   const lang   = detectLanguage(question);
@@ -698,16 +794,23 @@ async function sendMessageToAI(question) {
   if (casualPattern.test(normed)) {
     await sleep(150);
     hideTyping();
-    addMessage('ai', getHumanResponse(question, lang));
+    const reply = getHumanResponse(question, lang);
+    addMessage('ai', reply);
+    // Save to persistent memory
+    saveMessage('user', question);
+    saveMessage('ai', reply);
     return;
   }
 
-  // Build conversation context
+  // ── Build conversation context from current conversation ──
   const conv = conversations.find(c => c.id === currentConversationId);
   const history = conv ? conv.messages.slice(-10) : [];
   const historyText = history.length > 1
     ? history.slice(0, -1).map(m => `${m.role === 'user' ? 'User' : 'RanAI'}: ${m.text}`).join('\n')
     : '';
+
+  // ── Inject persistent memory into prompt ──────────────────
+  const memoryContext = buildMemoryPrompt();
 
   const langSuffix = lang === 'hi'
     ? '\n\nIMPORTANT: The user is speaking Hindi or Hinglish. Reply in natural spoken Hindi or Hinglish. Prefer Hindi when the user speaks Hindi. Use simple spoken words only.'
@@ -715,13 +818,17 @@ async function sendMessageToAI(question) {
     ? `\n\nIMPORTANT: Reply in the same language the user wrote in, detected language: ${lang}.`
     : '\n\nIMPORTANT: Reply in simple spoken English.';
 
-  const fullSystemPrompt = RANAI_SYSTEM_PROMPT + langSuffix;
-  // Include last 10 messages as context so Pollinations remembers the conversation
+  // Inject user name for personalised response
+  const userName = currentUser ? (currentUser.firstName || currentUser.name || '') : '';
+  const userNameHint = userName ? `\n\nThe user's name is ${userName}. Address them by name occasionally for a personal touch.` : '';
+
+  const fullSystemPrompt = RANAI_SYSTEM_PROMPT + langSuffix + userNameHint + memoryContext;
+
   const userContent = historyText
     ? `Conversation history (last messages):\n${historyText}\n\nUser: ${question}`
     : question;
 
-  // ---- PRIMARY: Pollinations API (fast, but sometimes unreliable) ----
+  // ---- PRIMARY: Pollinations API ----
   let pollinationsSuccess = false;
   try {
     const pollUrl = `https://text.pollinations.ai/${encodeURIComponent(fullSystemPrompt + '\n\n' + userContent)}`;
@@ -730,21 +837,22 @@ async function sendMessageToAI(question) {
     if (answer && answer.length > 5) {
       hideTyping();
       addMessage('ai', answer);
+      // Save to persistent memory
+      saveMessage('user', question);
+      saveMessage('ai', answer);
       pollinationsSuccess = true;
       return;
     }
   } catch (pollErr) {
     console.error('[Pollinations] All retries failed:', pollErr.message);
-    // Fall through to backend
   }
 
   if (!pollinationsSuccess) {
-    // ---- FALLBACK: Backend API (more reliable but may cold start) ----
+    // ---- FALLBACK: Backend API ----
     try {
       const backendUrl = `${API}/ask`;
       const modifiedQuestion = lang === 'hi' ? question + ' (कृपया हिंदी में उत्तर दें)' : question;
 
-      // ── Build conversation history to send to backend ──────────────
       const conv = conversations.find(c => c.id === currentConversationId);
       const historyMessages = conv
         ? conv.messages.slice(-10).map(m => ({
@@ -753,11 +861,24 @@ async function sendMessageToAI(question) {
           }))
         : [];
 
+      // Also append persistent memory to backend history
+      const memoryMessages = loadMemory().map(m => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: m.text
+      }));
+      const combinedHistory = [...memoryMessages.slice(-10), ...historyMessages].slice(-20);
+
       const response = await fetchWithRetry(backendUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: modifiedQuestion, model: currentModel, lang, history: historyMessages }),
-        timeout: 20000  // 20 seconds to allow cold start
+        body: JSON.stringify({
+          question: modifiedQuestion,
+          model: currentModel,
+          lang,
+          history: combinedHistory,
+          userName: userName
+        }),
+        timeout: 20000
       }, 3, 1500);
       const data = await response.json();
       hideTyping();
@@ -766,6 +887,9 @@ async function sendMessageToAI(question) {
         answer = await translateText(answer, 'hi');
       }
       addMessage('ai', answer);
+      // Save to persistent memory
+      saveMessage('user', question);
+      saveMessage('ai', answer);
     } catch (finalErr) {
       hideTyping();
       console.error('[Backend] Final error:', finalErr);
@@ -875,21 +999,15 @@ function copyImageUrl(url) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// ADD THIS FUNCTION – Smart Image Enhancement (Pollinations-based + Canvas fallback)
+// Smart Image Enhancement (Pollinations-based + Canvas fallback)
 // ═══════════════════════════════════════════════════════════════════════
 
-/** Keywords that trigger image enhancement intent */
 const ENHANCE_KEYWORDS = /\b(enhance|improve|clean|hd|clear|beautify|saaf|quality|sharp|sharpness|upgrade|upscale|better|fix|restore|crisp|vivid|bright|clearer|badhao|accha|theek karo|saaf karo|hd karo|better bana|acha bana|improve karo|quality badhao)\b/i;
 
-/** Returns true if user message signals an enhancement request */
 function isEnhanceIntent(msg) {
   return ENHANCE_KEYWORDS.test(msg);
 }
 
-/**
- * Canvas-based local fallback: contrast + brightness + sharpening via convolution.
- * Returns a data-URL (PNG) of the processed image.
- */
 function canvasEnhance(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -901,14 +1019,11 @@ function canvasEnhance(file) {
         const W = img.naturalWidth  || img.width;
         const H = img.naturalHeight || img.height;
 
-        // ── Step 1: Draw original ──────────────────────────────────────
         const canvas = document.createElement('canvas');
         canvas.width = W; canvas.height = H;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, W, H);
 
-        // ── Step 2: Brightness + Contrast adjustment ───────────────────
-        // contrast: 1.25×  brightness: +12
         const src = ctx.getImageData(0, 0, W, H);
         const d   = src.data;
         const contrast  = 1.25;
@@ -921,11 +1036,9 @@ function canvasEnhance(file) {
         }
         ctx.putImageData(src, 0, 0);
 
-        // ── Step 3: Unsharp-mask / sharpening kernel ───────────────────
         const imgData = ctx.getImageData(0, 0, W, H);
         const inp = imgData.data;
         const out = new Uint8ClampedArray(inp.length);
-        // 3×3 sharpen kernel: center 9, neighbours -1
         const kernel = [0,-1,0,-1,5,-1,0,-1,0];
         for (let y = 1; y < H - 1; y++) {
           for (let x = 1; x < W - 1; x++) {
@@ -946,7 +1059,6 @@ function canvasEnhance(file) {
             out[oi+3] = inp[oi+3];
           }
         }
-        // copy border pixels unchanged
         for (let i = 0; i < inp.length; i += 4) {
           const x = (i / 4) % W, y = Math.floor((i / 4) / W);
           if (x === 0 || x === W - 1 || y === 0 || y === H - 1) {
@@ -965,9 +1077,6 @@ function canvasEnhance(file) {
   });
 }
 
-/**
- * Adds a loading bubble specifically for enhancement with custom label.
- */
 function addEnhanceBubble() {
   const hero      = $('hero');
   const container = $('chatMessages');
@@ -996,10 +1105,6 @@ function addEnhanceBubble() {
   return bubble;
 }
 
-/**
- * Fills the enhancement bubble with the result image + actions.
- * dataUrl can be a blob URL, canvas dataURL, or a Pollinations URL.
- */
 function fillEnhanceBubble(bubble, dataUrl, isCanvas) {
   const label   = isCanvas ? '🖼️ Enhanced (local processing)' : '✨ Enhanced Image';
   const dlHref  = dataUrl;
@@ -1039,20 +1144,11 @@ function fillEnhanceBubble(bubble, dataUrl, isCanvas) {
   }
 }
 
-/**
- * Main enhancement handler.
- * Tries Pollinations first with a descriptive prompt; falls back to Canvas processing.
- */
 async function handleImageEnhancement(file) {
   const bubble = addEnhanceBubble();
 
-  // ── Primary: Pollinations image generation with enhancement prompt ──
-  // Pollinations doesn't accept uploads, so we describe the image and ask
-  // it to produce an HD, enhanced version. We append a content hash so
-  // repeated calls generate a consistent (but fresh) result.
   try {
     const ext  = (file.name.split('.').pop() || 'image').toLowerCase();
-    const size = `${file.naturalWidth || ''}`.trim();
     const seed = Date.now();
 
     const prompt = encodeURIComponent(
@@ -1077,7 +1173,6 @@ async function handleImageEnhancement(file) {
     console.warn('[Enhancement] Pollinations failed, using Canvas fallback:', pollErr.message);
   }
 
-  // ── Fallback: Canvas-based local enhancement ────────────────────────
   try {
     const dataUrl = await canvasEnhance(file);
     if (bubble) fillEnhanceBubble(bubble, dataUrl, true);
@@ -1088,15 +1183,10 @@ async function handleImageEnhancement(file) {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// END ADD THIS FUNCTION
-// ═══════════════════════════════════════════════════════════════════════
-
 // ── Real-person / celebrity detection ────────────────────────────────
 const REAL_PERSON_PATTERN = /\b(aishwarya|aishwarya rai|shahrukh|shah rukh|salman|deepika|priyanka|katrina|anushka|alia|ranveer|akshay|hrithik|amitabh|ranbir|kareena|sonam|vidya|kangana|sundar pichai|elon musk|jeff bezos|bill gates|mark zuckerberg|modi|obama|trump|biden|putin|taylor swift|beyonce|rihanna|drake|eminem|brad pitt|angelina|jennifer aniston|tom cruise|leonardo|sachin|virat|rohit|ms dhoni|neymar|messi|ronaldo|cristiano)\b/i;
 
 async function handleImageGeneration(prompt) {
-  // Block real people
   if (REAL_PERSON_PATTERN.test(prompt)) {
     if (bubble_ref_hack) {/* noop */}
     const hero      = $('hero');
@@ -1117,7 +1207,6 @@ async function handleImageGeneration(prompt) {
 
   const bubble = addImageLoadingBubble();
 
-  // Try up to 3 seeds for reliability
   const seeds = [Date.now(), Math.floor(Math.random()*99999), 42];
   let lastErr = null;
 
@@ -1134,14 +1223,13 @@ async function handleImageGeneration(prompt) {
       });
       if (bubble) fillImageBubble(bubble, imageUrl, prompt);
       shouldSpeakNextReply = false;
-      return;                        // success — stop retrying
+      return;
     } catch (err) {
       lastErr = err;
       console.warn(`[Image Gen] seed ${seed} failed:`, err.message);
     }
   }
 
-  // All retries failed
   console.error('[Image Gen] All retries failed:', lastErr && lastErr.message);
   const lang = detectLanguage(prompt);
   const errMsg = lang === 'hi'
@@ -1151,7 +1239,6 @@ async function handleImageGeneration(prompt) {
   scrollToBottom();
   shouldSpeakNextReply = false;
 }
-// tiny stub to avoid undefined reference (unused)
 const bubble_ref_hack = null;
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -1348,15 +1435,12 @@ async function handleSend(fromVoice) {
   const hasOther  = attachedFiles.some(f => !f.type.startsWith('image/'));
   if (hasOther) showToast('Only image files can be analyzed. Others ignored.', 3000);
 
-  // INTEGRATE HERE – Enhancement intercept ─────────────────────────────
-  // If user typed an enhance keyword with NO image, nudge them.
   if (isEnhanceIntent(msg) && !hasImages && !attachedFiles.length) {
     if (msg) { shouldSpeakNextReply = fromVoice; addMessage('user', msg); }
     ta.value = ''; autoResizeTextarea();
     addMessage('ai', '📎 Please upload an image to enhance.');
     return;
   }
-  // If enhance intent AND image is attached → run enhancement, skip normal flow.
   if (isEnhanceIntent(msg) && hasImages) {
     const imageFile = attachedFiles.find(f => f.type.startsWith('image/'));
     if (msg) { shouldSpeakNextReply = fromVoice; addMessage('user', msg); }
@@ -1365,7 +1449,6 @@ async function handleSend(fromVoice) {
     await handleImageEnhancement(imageFile);
     return;
   }
-  // END INTEGRATE HERE ──────────────────────────────────────────────────
 
   if (msg) {
     shouldSpeakNextReply = fromVoice;
