@@ -67,15 +67,34 @@ function findBestAnswer(userInput) {
 }
 app.use(express.static(path.join(__dirname, "../client")));
 
-// Session setup for human-like conversation memory
+// ============================================================
+// SESSION SETUP — Per-user isolated memory (no database needed)
+// Each browser gets a unique session ID stored in a cookie.
+// Memory survives for 24 hours of inactivity (rolling window).
+// ============================================================
 app.use(
   session({
-    secret: "ranai-convo-secret",
-    resave: false,
+    secret: "ranai-convo-secret-v2",
+    resave: true,
     saveUninitialized: true,
-    cookie: { maxAge: 30 * 60 * 1000 }, // 30 minutes
+    rolling: true,                        // reset expiry on every request
+    cookie: {
+      maxAge: 24 * 60 * 60 * 1000,       // 24 hours
+      httpOnly: true,
+      sameSite: "lax",
+    },
   })
 );
+
+// Assign a stable unique ID to every new session
+// This ensures 100% isolation between different browser users.
+app.use((req, _res, next) => {
+  if (!req.session.userId) {
+    req.session.userId =
+      "user_" + Date.now() + "_" + Math.random().toString(36).slice(2, 9);
+  }
+  next();
+});
 
 // ============================================================
 // 🧠 PER-USER MEMORY SYSTEM
@@ -84,46 +103,128 @@ app.use(
 // which is unique per browser session / user.
 // ============================================================
 
+// ============================================================
+// MEMORY CONSTANTS
+// ============================================================
+const MAX_MESSAGES      = 50;   // messages kept per user (25 turns)
+const RECENT_CONTEXT    = 20;   // messages sent to AI APIs
+const SUMMARY_THRESHOLD = 40;   // summarise older messages when this many stored
+
 /**
  * loadMemory(req)
  * Returns the current user's memory object from their session.
- * Creates a fresh one if it doesn't exist yet.
- * Structure: { name: string|null, messages: Array<{role,content}> }
+ * Structure:
+ *   {
+ *     name      : string|null,
+ *     messages  : Array<{role, content, ts}>,  // ts = unix timestamp
+ *     summary   : string|null,                  // auto-summary of older turns
+ *     topics    : string[],                     // last 10 topics discussed
+ *     createdAt : number,
+ *   }
  */
 function loadMemory(req) {
   try {
     if (!req.session.userMemory || typeof req.session.userMemory !== "object") {
-      req.session.userMemory = { name: null, messages: [] };
+      req.session.userMemory = {
+        name: null,
+        messages: [],
+        summary: null,
+        topics: [],
+        createdAt: Date.now(),
+      };
     }
-    // Safety: ensure messages is always an array
-    if (!Array.isArray(req.session.userMemory.messages)) {
-      req.session.userMemory.messages = [];
-    }
-    return req.session.userMemory;
+    const m = req.session.userMemory;
+    if (!Array.isArray(m.messages)) m.messages = [];
+    if (!Array.isArray(m.topics))   m.topics   = [];
+    if (!m.createdAt)               m.createdAt = Date.now();
+    return m;
   } catch (err) {
     console.error("loadMemory error:", err.message);
-    return { name: null, messages: [] };
+    return { name: null, messages: [], summary: null, topics: [], createdAt: Date.now() };
   }
 }
 
 /**
  * saveMessage(req, role, content)
- * Appends a message to this user's session memory.
- * Keeps only the last 10 messages for performance.
- * role: "user" | "assistant"
+ * Appends a timestamped message.  When messages exceed SUMMARY_THRESHOLD,
+ * the oldest half is collapsed into a plain-text summary so the AI still
+ * "remembers" early conversation without blowing up token counts.
  */
 function saveMessage(req, role, content) {
   try {
     const memory = loadMemory(req);
-    memory.messages.push({ role, content });
-    // Keep only last 10 messages (5 user + 5 AI turns)
-    if (memory.messages.length > 10) {
-      memory.messages = memory.messages.slice(-10);
+    memory.messages.push({ role, content, ts: Date.now() });
+
+    // ── Auto-summarise old messages when the buffer is large ──
+    if (memory.messages.length >= SUMMARY_THRESHOLD) {
+      const keepFrom   = Math.floor(SUMMARY_THRESHOLD / 2);   // keep newest half
+      const oldMsgs    = memory.messages.slice(0, keepFrom);
+      const newMsgs    = memory.messages.slice(keepFrom);
+      const oldSummary = oldMsgs
+        .map(m => `${m.role === "user" ? "User" : "RanAI"}: ${m.content}`)
+        .join("\n");
+      memory.summary  = (memory.summary ? memory.summary + "\n" : "") + oldSummary;
+      memory.messages = newMsgs;
     }
+
+    // Hard cap — never exceed MAX_MESSAGES
+    if (memory.messages.length > MAX_MESSAGES) {
+      memory.messages = memory.messages.slice(-MAX_MESSAGES);
+    }
+
     req.session.userMemory = memory;
   } catch (err) {
     console.error("saveMessage error:", err.message);
   }
+}
+
+/**
+ * saveTopics(req, text)
+ * Extracts likely topic keywords from user message and saves them.
+ * Helps the AI say "we talked about X earlier" when asked.
+ */
+function saveTopics(req, text) {
+  try {
+    const memory = loadMemory(req);
+    // Very simple heuristic: skip short/common words, keep rest
+    const stopwords = new Set([
+      "kya","hai","ho","ka","ki","ke","me","mujhe","main","tum","aap","kaise",
+      "is","are","the","a","an","what","how","why","when","where","who","and",
+      "or","do","can","i","you","it","this","that","please","help","tell","me",
+    ]);
+    const words = text.toLowerCase().replace(/[^a-z0-9\s\u0900-\u097F]/g,"").split(/\s+/);
+    const keywords = words.filter(w => w.length > 3 && !stopwords.has(w));
+    if (keywords.length) {
+      memory.topics = [...new Set([...memory.topics, ...keywords])].slice(-10);
+      req.session.userMemory = memory;
+    }
+  } catch (err) { /* silent */ }
+}
+
+/**
+ * buildContextBlock(memory)
+ * Returns a formatted string with summary + recent messages
+ * that is injected into every AI prompt.
+ */
+function buildContextBlock(memory) {
+  let block = "";
+  if (memory.name) {
+    block += `User's name: ${memory.name}.\n`;
+  }
+  if (memory.topics && memory.topics.length) {
+    block += `Topics discussed so far: ${memory.topics.join(", ")}.\n`;
+  }
+  if (memory.summary) {
+    block += `\n[Earlier conversation summary]:\n${memory.summary}\n`;
+  }
+  const recent = memory.messages.slice(-RECENT_CONTEXT);
+  if (recent.length) {
+    block += "\n[Recent conversation]:\n";
+    block += recent
+      .map(m => `${m.role === "user" ? "User" : "RanAI"}: ${m.content}`)
+      .join("\n");
+  }
+  return block;
 }
 
 /**
@@ -132,7 +233,13 @@ function saveMessage(req, role, content) {
  */
 function clearMemory(req) {
   try {
-    req.session.userMemory = { name: null, messages: [] };
+    req.session.userMemory = {
+      name: null,
+      messages: [],
+      summary: null,
+      topics: [],
+      createdAt: Date.now(),
+    };
   } catch (err) {
     console.error("clearMemory error:", err.message);
   }
@@ -2858,21 +2965,18 @@ Act like a real human voice assistant.
 Understand messy voice input and respond in a way that sounds natural when spoken aloud.
 `;
 
-async function buildSmartReply(question, conversationHistory, detectedLang) {
+async function buildSmartReply(question, conversationHistory, detectedLang, memoryObj) {
   if (!model) return null;
   try {
-    // Build conversation context from memory
-    let messages = [];
-    if (conversationHistory && conversationHistory.length > 0) {
-      for (const msg of conversationHistory) {
-        messages.push(`${msg.role === "user" ? "User" : "RanAI"}: ${msg.content}`);
-      }
-    }
-    const contextBlock = messages.length > 0
-      ? `\n\nConversation so far:\n${messages.join("\n")}\n\n`
-      : "";
+    // Full context block from session memory
+    const ctxBlock = memoryObj ? buildContextBlock(memoryObj) : (() => {
+      if (!conversationHistory || !conversationHistory.length) return "";
+      return "\n\nConversation so far:\n" +
+        conversationHistory.map(m => `${m.role === "user" ? "User" : "RanAI"}: ${m.content}`).join("\n");
+    })();
 
-    const fullPrompt = `${VOICE_ASSISTANT_SYSTEM_PROMPT}${contextBlock}User: ${question}\n\nRanAI:`;
+    const contextSection = ctxBlock ? `\n\n[Memory & Context]:\n${ctxBlock}\n\n` : "";
+    const fullPrompt = `${VOICE_ASSISTANT_SYSTEM_PROMPT}${contextSection}User: ${question}\n\nRanAI:`;
 
     const result = await model.generateContent(fullPrompt);
     const text = result.response.text();
@@ -2890,12 +2994,18 @@ async function buildSmartReply(question, conversationHistory, detectedLang) {
 
 const CHATGPT_SYSTEM_PROMPT = VOICE_ASSISTANT_SYSTEM_PROMPT;
 
-async function buildChatGPTReply(question, conversationHistory) {
+async function buildChatGPTReply(question, conversationHistory, memoryObj) {
   if (!OPENAI_API_KEY || OPENAI_API_KEY === "YOUR_OPENAI_API_KEY_HERE") return null;
   try {
-    // Build messages array with full conversation history for memory
-    const messages = [{ role: "system", content: CHATGPT_SYSTEM_PROMPT }];
+    // Build context block from full session memory (summary + topics + recent)
+    const ctxBlock = memoryObj ? buildContextBlock(memoryObj) : "";
+    const systemWithContext = ctxBlock
+      ? CHATGPT_SYSTEM_PROMPT + "\n\n[User Memory & Context]:\n" + ctxBlock
+      : CHATGPT_SYSTEM_PROMPT;
 
+    const messages = [{ role: "system", content: systemWithContext }];
+
+    // Add recent turns so ChatGPT sees alternating user/assistant pairs
     if (conversationHistory && conversationHistory.length > 0) {
       for (const msg of conversationHistory) {
         messages.push({
@@ -3008,20 +3118,30 @@ app.post("/ask", async (req, res) => {
   }
 
   // ── STEP 4: Build conversation history from THIS user's session memory ──
-  // We prefer client-sent history (accurate), fall back to session memory.
-  let conversationHistory;
+  // Always use session memory as source of truth.
+  // If client also sends history, merge new items into session.
   if (clientHistory && Array.isArray(clientHistory) && clientHistory.length > 0) {
-    conversationHistory = clientHistory.slice(-10).map(m => ({
-      role: m.role === "user" ? "user" : "assistant",
-      content: m.content || ""
-    }));
-    // Sync to session so session stays current for this user
-    userMemory.messages = conversationHistory.slice();
+    // Merge: add client messages that are not already saved
+    const saved = new Set(userMemory.messages.map(m => m.content));
+    for (const m of clientHistory.slice(-RECENT_CONTEXT)) {
+      if (!saved.has(m.content || "")) {
+        userMemory.messages.push({
+          role: m.role === "user" ? "user" : "assistant",
+          content: m.content || "",
+          ts: Date.now(),
+        });
+      }
+    }
+    if (userMemory.messages.length > MAX_MESSAGES) {
+      userMemory.messages = userMemory.messages.slice(-MAX_MESSAGES);
+    }
     req.session.userMemory = userMemory;
-  } else {
-    // Use this user's session messages as fallback
-    conversationHistory = userMemory.messages.slice(-10);
   }
+  // Always derive conversationHistory from session (persistent)
+  const conversationHistory = userMemory.messages.slice(-RECENT_CONTEXT);
+
+  // ── STEP 4.5: Track topics ──
+  saveTopics(req, question);
 
   const detectedLang = lang || detectLanguage(question);
   const tense = detectTense(question);
@@ -3047,15 +3167,10 @@ app.post("/ask", async (req, res) => {
       ? "Reply only in Hindi or Hinglish, exactly the way the user speaks."
       : "Reply in the same language and style as the user.";
 
-    // Build history block for Pollinations (this user's messages only)
-    let historyBlock = "";
-    if (conversationHistory.length > 0) {
-      historyBlock = "\n\nConversation so far:\n" +
-        conversationHistory.map(m => `${m.role === "user" ? "User" : "RanAI"}: ${m.content}`).join("\n") +
-        "\n";
-    }
+    // Build full context block from session memory (includes summary + recent)
+    const contextBlock = buildContextBlock(userMemory);
 
-    const fullPrompt = `${VOICE_ASSISTANT_SYSTEM_PROMPT}${nameContext}\n${langInstruction}${historyBlock}\nUser question: ${question}`;
+    const fullPrompt = `${VOICE_ASSISTANT_SYSTEM_PROMPT}${nameContext}\n${langInstruction}\n\n[Memory & Context]:\n${contextBlock}\n\nUser question: ${question}`;
     const polRes = await axios.get(
       `https://text.pollinations.ai/${encodeURIComponent(fullPrompt)}`,
       { timeout: 10000, responseType: "text" }
@@ -3072,7 +3187,7 @@ app.post("/ask", async (req, res) => {
   }
 
   // 1.6 🧠 ChatGPT Brain (FALLBACK — GPT-4o by OpenAI)
-  const chatgptReply = await buildChatGPTReply(question, conversationHistory);
+  const chatgptReply = await buildChatGPTReply(question, conversationHistory, userMemory);
   if (chatgptReply) {
     saveMessage(req, "user", question);
     saveMessage(req, "assistant", chatgptReply);
@@ -3082,7 +3197,7 @@ app.post("/ask", async (req, res) => {
   // 1.6 Smart AI Engine — Gemini fallback (if ChatGPT key not set or fails)
   // Uses Gemini with a powerful system prompt for long, detailed, multilingual answers.
   // Runs only if ChatGPT is unavailable. Falls through to Tavily if Gemini also fails.
-  const smartReply = await buildSmartReply(question, conversationHistory, detectedLang);
+  const smartReply = await buildSmartReply(question, conversationHistory, detectedLang, userMemory);
   if (smartReply) {
     saveMessage(req, "user", question);
     saveMessage(req, "assistant", smartReply);
@@ -3159,12 +3274,9 @@ app.post("/ask", async (req, res) => {
           : "Answer in English.";
         const tenseInstruction = `The user's question is in ${tense} tense. Please respond in the same tense (${tense}) as the user.`;
         const ranaiPersona = VOICE_ASSISTANT_SYSTEM_PROMPT.trim();
-        // Build conversation context (this user's history only)
-        let context = "";
-        if (conversationHistory.length > 0) {
-          context = "Previous conversation:\n" + conversationHistory.map(msg => `${msg.role}: ${msg.content}`).join("\n") + "\n\n";
-        }
-        const prompt = `${ranaiPersona}${nameContext}\n\n${langInstruction} ${tenseInstruction}\n\n${context}User: ${question}`;
+        // Use full memory context in fallback too
+        const fullCtx = buildContextBlock(userMemory);
+        const prompt = `${ranaiPersona}${nameContext}\n\n${langInstruction} ${tenseInstruction}\n\n[Memory]:\n${fullCtx}\n\nUser: ${question}`;
         const result = await model.generateContent(prompt);
         const geminiReply = result.response.text();
 
@@ -3410,6 +3522,27 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "../client/index.html"));
 });
 
+// ========== 📊 MEMORY STATS ENDPOINT ==========
+// Returns current user's memory stats — useful for debugging / UI badge.
+app.get("/memory-stats", (req, res) => {
+  try {
+    const memory = loadMemory(req);
+    return res.json({
+      success: true,
+      userId: req.session.userId || "unknown",
+      name: memory.name || null,
+      messageCount: memory.messages.length,
+      hasSummary: !!memory.summary,
+      topics: memory.topics || [],
+      sessionAge: memory.createdAt
+        ? Math.round((Date.now() - memory.createdAt) / 60000) + " minutes"
+        : "unknown",
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: "Could not fetch stats." });
+  }
+});
+
 // ========== 🧹 CLEAR MEMORY ENDPOINT ==========
 // Clears only the current user's session memory (name + chat history).
 // Other users are completely unaffected.
@@ -3440,8 +3573,9 @@ app.listen(PORT, () => {
   console.log(`✅ Gemini Vision ready`);
   console.log(`🧮 Advanced math solver active`);
   console.log(`🇮🇳 Real-time India info active (fixed timezone)`);
-  console.log(`💬 Human-like conversation with PER-USER memory isolation ✅`);
+  console.log(`💬 ChatGPT-style PER-USER memory: 50 msgs, 24h sessions, auto-summary ✅`);
   console.log(`🧠 Name detection: English + Hinglish patterns enabled`);
+  console.log(`📊 Memory stats endpoint: GET /memory-stats`);
   console.log(`⏱️ Tense matching enabled`);
   console.log(`🔟 10-point internet answers enabled`);
   console.log(`🌐 Multilingual (EN/HI/Hinglish)`);
