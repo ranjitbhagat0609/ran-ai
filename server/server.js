@@ -3295,8 +3295,9 @@ app.post("/ask", async (req, res) => {
   }
 });
 
-// ========== VOICE-TO-TEXT (OpenAI Whisper) ==========
-// Accepts audio blob (webm/ogg/mp4/wav) and returns transcript
+// ========== VOICE-TO-TEXT (OpenAI Whisper + Gemini Fallback) ==========
+// Accepts audio blob (webm/ogg/mp4/wav) and returns transcript.
+// Pehle Whisper try karta hai, agar fail ho to Gemini Audio se fallback karta hai.
 const audioUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB max (Whisper limit)
@@ -3304,33 +3305,131 @@ const audioUpload = multer({
 
 app.post('/voice-to-text', audioUpload.single('audio'), async (req, res) => {
   if (!req.file) return res.status(400).json({ success: false, error: 'No audio file received' });
-  if (!OPENAI_API_KEY || OPENAI_API_KEY === 'YOUR_OPENAI_API_KEY_HERE') {
-    return res.status(503).json({ success: false, error: 'OpenAI key not configured' });
-  }
-  try {
-    const formData = new FormData();
-    const ext = req.file.mimetype.includes('ogg') ? 'ogg'
-              : req.file.mimetype.includes('webm') ? 'webm'
-              : req.file.mimetype.includes('mp4')  ? 'mp4'
-              : 'wav';
-    formData.append('file', req.file.buffer, {
-      filename: `audio.${ext}`,
-      contentType: req.file.mimetype,
-      knownLength: req.file.buffer.length,
-    });
-    formData.append('model', 'whisper-1');
-    formData.append('language', 'hi'); // supports Hindi + English mixed
 
-    const response = await axios.post('https://api.openai.com/v1/audio/transcriptions', formData, {
-      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...formData.getHeaders() },
-      timeout: 30000,
+  // ── Path 1: OpenAI Whisper (best quality, Hindi + English) ──
+  if (OPENAI_API_KEY && OPENAI_API_KEY !== 'YOUR_OPENAI_API_KEY_HERE') {
+    try {
+      const formData = new FormData();
+      const ext = req.file.mimetype.includes('ogg') ? 'ogg'
+                : req.file.mimetype.includes('webm') ? 'webm'
+                : req.file.mimetype.includes('mp4')  ? 'mp4'
+                : 'wav';
+      formData.append('file', req.file.buffer, {
+        filename: `audio.${ext}`,
+        contentType: req.file.mimetype,
+        knownLength: req.file.buffer.length,
+      });
+      formData.append('model', 'whisper-1');
+      formData.append('language', 'hi'); // Hindi + English mixed
+
+      const response = await axios.post('https://api.openai.com/v1/audio/transcriptions', formData, {
+        headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...formData.getHeaders() },
+        timeout: 30000,
+      });
+      const transcript = response.data?.text?.trim() || '';
+      if (transcript) {
+        console.log('✅ Whisper transcript:', transcript);
+        return res.json({ success: true, transcript, source: 'whisper' });
+      }
+    } catch (whisperErr) {
+      console.warn('⚠️ Whisper failed, trying Gemini STT fallback:', whisperErr.response?.data?.error?.message || whisperErr.message);
+    }
+  } else {
+    console.warn('⚠️ OpenAI key not set — using Gemini STT fallback directly');
+  }
+
+  // ── Path 2: Gemini Audio Transcription Fallback ──
+  if (model) {
+    try {
+      const base64Audio = req.file.buffer.toString('base64');
+      const mimeType = req.file.mimetype || 'audio/webm';
+      const result = await model.generateContent([
+        {
+          inlineData: {
+            mimeType: mimeType,
+            data: base64Audio,
+          },
+        },
+        {
+          text: 'Please transcribe this audio exactly as spoken. The audio may be in Hindi, English, or Hinglish (mixed). Return ONLY the transcribed text, nothing else.',
+        },
+      ]);
+      const transcript = result.response.text()?.trim() || '';
+      if (transcript && transcript.length > 1) {
+        console.log('✅ Gemini STT transcript:', transcript);
+        return res.json({ success: true, transcript, source: 'gemini' });
+      }
+    } catch (geminiErr) {
+      console.error('❌ Gemini STT error:', geminiErr.message);
+    }
+  }
+
+  // ── Path 3: Both failed — tell frontend to use browser Web Speech API ──
+  console.error('❌ All STT methods failed. Telling client to use browser STT.');
+  return res.status(503).json({
+    success: false,
+    error: 'Server STT unavailable',
+    useBrowserSTT: true, // Frontend is flag se browser ka Web Speech API use karega
+  });
+});
+
+// ========== TEXT-TO-SPEECH / TTS (Hindi Voice Output) ==========
+// POST /tts  { text: "..." }
+// Returns audio/mpeg stream — browser seedha play kar sakta hai.
+// Google Translate TTS use karta hai — free, no API key, Hindi support.
+app.post('/tts', async (req, res) => {
+  const { text, lang } = req.body;
+  if (!text || !text.trim()) {
+    return res.status(400).json({ success: false, error: 'Text required' });
+  }
+
+  // Text ko 200 char ke chunks me todta hai (Google TTS limit)
+  const cleanText = text
+    .replace(/\*\*/g, '')   // markdown bold hatao
+    .replace(/\*/g, '')
+    .replace(/#+\s/g, '')    // headings hatao
+    .replace(/\n+/g, ' ')   // newlines ko space
+    .trim();
+
+  const ttsLang = lang || 'hi'; // default Hindi
+  const chunks = [];
+  for (let i = 0; i < cleanText.length; i += 200) {
+    chunks.push(cleanText.slice(i, i + 200));
+  }
+
+  try {
+    const audioBuffers = [];
+    for (const chunk of chunks) {
+      const encoded = encodeURIComponent(chunk);
+      const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encoded}&tl=${ttsLang}&client=tw-ob`;
+      const response = await axios.get(url, {
+        responseType: 'arraybuffer',
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Referer': 'https://translate.google.com/',
+        },
+      });
+      audioBuffers.push(Buffer.from(response.data));
+    }
+
+    const combined = Buffer.concat(audioBuffers);
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': combined.length,
+      'Cache-Control': 'no-cache',
     });
-    const transcript = response.data?.text?.trim() || '';
-    console.log('✅ Whisper transcript:', transcript);
-    return res.json({ success: true, transcript });
-  } catch (err) {
-    console.error('Whisper error:', err.response?.data || err.message);
-    return res.status(500).json({ success: false, error: 'Transcription failed' });
+    console.log(`✅ TTS generated (${ttsLang}): "${cleanText.slice(0, 60)}..."`);
+    return res.send(combined);
+  } catch (ttsErr) {
+    console.error('❌ Google TTS error:', ttsErr.message);
+    // Fallback: browser ko bolo Web Speech API use kare
+    return res.status(503).json({
+      success: false,
+      error: 'TTS server unavailable',
+      useBrowserTTS: true,
+      text: cleanText, // browser ko text bhejte hain taaki woh khud bole
+    });
   }
 });
 
