@@ -680,50 +680,106 @@ function pickBestVoice(lang, voices) {
   );
 }
 
-function speakReply(text) {
-  if (!('speechSynthesis' in window) || !text) return;
+// ── Active TTS audio element (for stop support) ──
+let _ttsAudio = null;
 
+/**
+ * speakReply(text)
+ * 3-layer TTS system:
+ *   Layer 1 → Server /tts endpoint (Google TTS, best Hindi quality)
+ *   Layer 2 → Browser SpeechSynthesis with hi-IN voice (if available)
+ *   Layer 3 → Browser SpeechSynthesis with any available voice (last resort)
+ */
+async function speakReply(text) {
+  if (!text) return;
   const spokenText = sanitizeSpeechText(text);
   if (!spokenText) return;
 
-  const synth = window.speechSynthesis;
   const lang = detectLanguage(spokenText);
 
+  // Stop any currently playing audio
+  if (_ttsAudio) { try { _ttsAudio.pause(); _ttsAudio = null; } catch(e) {} }
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+
+  // ── Layer 1: Server /tts (Google Translate TTS – best Hindi voice) ──
+  try {
+    const ttsLang = lang === 'hi' ? 'hi' : 'en';
+    const res = await fetch(`${API}/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: spokenText, lang: ttsLang }),
+    });
+
+    if (res.ok) {
+      const blob = await res.blob();
+      const audioUrl = URL.createObjectURL(blob);
+      _ttsAudio = new Audio(audioUrl);
+      _ttsAudio.onended = () => { URL.revokeObjectURL(audioUrl); _ttsAudio = null; };
+      _ttsAudio.onerror = () => {
+        URL.revokeObjectURL(audioUrl);
+        _ttsAudio = null;
+        _speakWithBrowser(spokenText, lang);
+      };
+      await _ttsAudio.play();
+      return;
+    }
+
+    // Server returned non-OK – check for useBrowserTTS flag
+    const data = await res.json().catch(() => ({}));
+    if (data.useBrowserTTS) {
+      _speakWithBrowser(data.text || spokenText, lang);
+      return;
+    }
+  } catch (serverErr) {
+    console.warn('[TTS] Server TTS failed, using browser fallback:', serverErr.message);
+  }
+
+  // ── Layer 2 & 3: Browser SpeechSynthesis fallback ──
+  _speakWithBrowser(spokenText, lang);
+}
+
+/**
+ * _speakWithBrowser(text, lang)
+ * Internal: Web Speech API with hi-IN or best available voice.
+ */
+function _speakWithBrowser(text, lang) {
+  if (!('speechSynthesis' in window)) return;
+  const synth = window.speechSynthesis;
   synth.cancel();
 
-  const utterance = new SpeechSynthesisUtterance(spokenText);
-  utterance.lang = lang === 'hi' ? 'hi-IN' : 'en-IN';
-  utterance.rate = 1.5;
-  utterance.pitch = 1.0;
-  utterance.volume = 1.5;
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang   = lang === 'hi' ? 'hi-IN' : 'en-IN';
+  utterance.rate   = 1.0;
+  utterance.pitch  = 1.0;
+  utterance.volume = 1.0;
 
-  const speakNow = () => {
+  const doSpeak = () => {
     const voices = synth.getVoices();
     const chosenVoice = pickBestVoice(lang, voices);
     if (chosenVoice) {
       utterance.voice = chosenVoice;
-      utterance.lang = chosenVoice.lang;
+      utterance.lang  = chosenVoice.lang;
     }
-    synth.speak(utterance);
+    try { synth.speak(utterance); } catch(e) { console.warn('[TTS] Browser speak error:', e.message); }
   };
 
   const voices = synth.getVoices();
-  if (voices.length) {
-    speakNow();
-  } else {
-    const onVoicesChanged = () => {
-      synth.removeEventListener('voiceschanged', onVoicesChanged);
-      speakNow();
-    };
-    synth.addEventListener('voiceschanged', onVoicesChanged);
+  if (voices.length) { doSpeak(); }
+  else {
+    const handler = () => { synth.removeEventListener('voiceschanged', handler); doSpeak(); };
+    synth.addEventListener('voiceschanged', handler);
   }
 }
 
 function stopVoice() {
-  if (window.speechSynthesis) {
-    window.speechSynthesis.cancel();
-    showToast('Voice stopped', 1500);
+  // Stop server TTS audio
+  if (_ttsAudio) {
+    try { _ttsAudio.pause(); _ttsAudio.currentTime = 0; } catch(e) {}
+    _ttsAudio = null;
   }
+  // Stop browser SpeechSynthesis
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+  showToast('Voice stopped ⏹️', 1500);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
