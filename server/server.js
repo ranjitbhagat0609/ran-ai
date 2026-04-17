@@ -76,6 +76,126 @@ app.use(
     cookie: { maxAge: 30 * 60 * 1000 }, // 30 minutes
   })
 );
+
+// ============================================================
+// 🧠 PER-USER MEMORY SYSTEM
+// Each user's session gets its own isolated memory object.
+// No global variables are used. Memory lives in req.session
+// which is unique per browser session / user.
+// ============================================================
+
+/**
+ * loadMemory(req)
+ * Returns the current user's memory object from their session.
+ * Creates a fresh one if it doesn't exist yet.
+ * Structure: { name: string|null, messages: Array<{role,content}> }
+ */
+function loadMemory(req) {
+  try {
+    if (!req.session.userMemory || typeof req.session.userMemory !== "object") {
+      req.session.userMemory = { name: null, messages: [] };
+    }
+    // Safety: ensure messages is always an array
+    if (!Array.isArray(req.session.userMemory.messages)) {
+      req.session.userMemory.messages = [];
+    }
+    return req.session.userMemory;
+  } catch (err) {
+    console.error("loadMemory error:", err.message);
+    return { name: null, messages: [] };
+  }
+}
+
+/**
+ * saveMessage(req, role, content)
+ * Appends a message to this user's session memory.
+ * Keeps only the last 10 messages for performance.
+ * role: "user" | "assistant"
+ */
+function saveMessage(req, role, content) {
+  try {
+    const memory = loadMemory(req);
+    memory.messages.push({ role, content });
+    // Keep only last 10 messages (5 user + 5 AI turns)
+    if (memory.messages.length > 10) {
+      memory.messages = memory.messages.slice(-10);
+    }
+    req.session.userMemory = memory;
+  } catch (err) {
+    console.error("saveMessage error:", err.message);
+  }
+}
+
+/**
+ * clearMemory(req)
+ * Resets this user's name and chat history completely.
+ */
+function clearMemory(req) {
+  try {
+    req.session.userMemory = { name: null, messages: [] };
+  } catch (err) {
+    console.error("clearMemory error:", err.message);
+  }
+}
+
+/**
+ * extractName(text)
+ * Detects name introduction phrases in English and Hinglish.
+ * Patterns supported:
+ *   "my name is Ranjit"
+ *   "i am Ranjit"
+ *   "mera naam Ranjit hai"
+ *   "mujhe Ranjit kehte hain"
+ *   "call me Ranjit"
+ * Returns the extracted name string, or null if none found.
+ */
+function extractName(text) {
+  const patterns = [
+    // English patterns
+    /\bmy\s+name\s+is\s+([A-Za-z][A-Za-z\s]{0,30}?)(?:\s*[.,!?]|$)/i,
+    /\bi\s+am\s+([A-Za-z][A-Za-z\s]{0,20}?)(?:\s*[.,!?]|$)/i,
+    /\bcall\s+me\s+([A-Za-z][A-Za-z\s]{0,20}?)(?:\s*[.,!?]|$)/i,
+    /\bpeople\s+call\s+me\s+([A-Za-z][A-Za-z\s]{0,20}?)(?:\s*[.,!?]|$)/i,
+    // Hinglish patterns
+    /\bmera\s+naam\s+([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F\s]{0,20}?)\s+hai/i,
+    /\bmera\s+naam\s+([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F\s]{0,20}?)(?:\s*[.,!?]|$)/i,
+    /\bmujhe\s+([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F\s]{0,20}?)\s+kehte/i,
+    /\bmujhe\s+([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F\s]{0,20}?)\s+bolte/i,
+    /\bnaam\s+hai\s+([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F\s]{0,20}?)(?:\s*[.,!?]|$)/i,
+    /\bmain\s+([A-Za-z][A-Za-z\s]{0,20}?)\s+hoon/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      const name = match[1].trim();
+      // Filter out common false-positives (short filler words)
+      const stopWords = ["a", "an", "the", "here", "fine", "okay", "ok", "good", "not", "no", "yes"];
+      if (name.length >= 2 && !stopWords.includes(name.toLowerCase())) {
+        // Capitalize first letter of each word
+        return name.replace(/\b\w/g, c => c.toUpperCase());
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * getUserName(req)
+ * Returns the stored name for this user, or "User" as fallback.
+ */
+function getUserName(req) {
+  try {
+    const memory = loadMemory(req);
+    return memory.name || "User";
+  } catch (err) {
+    return "User";
+  }
+}
+
+// ============================================================
+// END OF PER-USER MEMORY SYSTEM
+// ============================================================
 app.post("/chat", (req, res) => {
   const userMsg = req.body.message;
 
@@ -2846,43 +2966,77 @@ async function buildChatGPTReply(question, conversationHistory) {
   }
 }
 
-// ========== /ask ENDPOINT (with conversation, tense, 10-point answers) ==========
+// ========== /ask ENDPOINT (with per-user memory, name detection, tense, 10-point answers) ==========
 app.post("/ask", async (req, res) => {
   const { question, lang, history: clientHistory } = req.body;
   if (!question || !question.trim()) {
     return res.json({ success: false, reply: "कृपया कुछ पूछें!" });
   }
 
-  // Initialize session conversation memory if not exists
-  if (!req.session.conversation) {
-    req.session.conversation = [];
+  // ── STEP 1: Load THIS user's isolated memory from their session ──
+  const userMemory = loadMemory(req);
+
+  // ── STEP 2: Detect and store user's name (per-user, never shared) ──
+  const detectedName = extractName(question);
+  if (detectedName) {
+    userMemory.name = detectedName;
+    req.session.userMemory = userMemory; // Persist name to this user's session
+    console.log(`📝 Name saved for session: "${detectedName}"`);
+    const nameLang = detectLanguage(question);
+    const nameReply = nameLang === "hi"
+      ? `Nice! Main tumhara naam yaad rakh lunga, ${detectedName}! 😊 Kuch aur batao?`
+      : `Got it! I'll remember your name, ${detectedName}! 😊 How can I help you?`;
+    saveMessage(req, "user", question);
+    saveMessage(req, "assistant", nameReply);
+    return res.json({ success: true, reply: nameReply });
   }
 
-  // ── Merge: prefer client-sent history (more accurate), fallback to session ──
-  // Client sends the actual conversation array; session is a backup.
+  // ── STEP 3: Handle "what is my name" queries using per-user stored name ──
+  if (/\b(mera naam kya|mera name|what('?s| is) my name|my name kya|aap mujhe kya kehte)\b/i.test(question)) {
+    const storedName = userMemory.name;
+    const nameLang = detectLanguage(question);
+    const nameAnswer = storedName
+      ? (nameLang === "hi"
+          ? `Tumhara naam ${storedName} hai! 😊`
+          : `Your name is ${storedName}! 😊`)
+      : (nameLang === "hi"
+          ? "Tumne abhi tak apna naam nahi bataya. Batao kya hai tumhara naam? 😊"
+          : "You haven't told me your name yet. What's your name? 😊");
+    saveMessage(req, "user", question);
+    saveMessage(req, "assistant", nameAnswer);
+    return res.json({ success: true, reply: nameAnswer });
+  }
+
+  // ── STEP 4: Build conversation history from THIS user's session memory ──
+  // We prefer client-sent history (accurate), fall back to session memory.
   let conversationHistory;
   if (clientHistory && Array.isArray(clientHistory) && clientHistory.length > 0) {
-    // Use client history (last 10 messages), normalize roles
     conversationHistory = clientHistory.slice(-10).map(m => ({
       role: m.role === "user" ? "user" : "assistant",
       content: m.content || ""
     }));
-    // Sync back to session so session stays up-to-date
-    req.session.conversation = conversationHistory.slice();
+    // Sync to session so session stays current for this user
+    userMemory.messages = conversationHistory.slice();
+    req.session.userMemory = userMemory;
   } else {
-    // Fallback to session memory
-    conversationHistory = req.session.conversation.slice(-10);
+    // Use this user's session messages as fallback
+    conversationHistory = userMemory.messages.slice(-10);
   }
 
   const detectedLang = lang || detectLanguage(question);
   const tense = detectTense(question);
 
+  // ── STEP 5: Personalize system prompt with this user's name ──
+  const userName = userMemory.name || null;
+  const nameContext = userName
+    ? `\nThe user's name is ${userName}. Address them by name occasionally to feel personal.\n`
+    : "";
+
   // 1. Try local response (includes conversational dataset, real-time India, math, tables, etc.)
   const localReply = getLocalResponse(question, tense);
   if (localReply) {
-    // Update conversation memory
-    req.session.conversation.push({ role: "user", content: question });
-    req.session.conversation.push({ role: "assistant", content: localReply });
+    saveMessage(req, "user", question);
+    saveMessage(req, "assistant", localReply);
     return res.json({ success: true, reply: localReply });
   }
 
@@ -2893,7 +3047,7 @@ app.post("/ask", async (req, res) => {
       ? "Reply only in Hindi or Hinglish, exactly the way the user speaks."
       : "Reply in the same language and style as the user.";
 
-    // Build history block for Pollinations
+    // Build history block for Pollinations (this user's messages only)
     let historyBlock = "";
     if (conversationHistory.length > 0) {
       historyBlock = "\n\nConversation so far:\n" +
@@ -2901,7 +3055,7 @@ app.post("/ask", async (req, res) => {
         "\n";
     }
 
-    const fullPrompt = `${VOICE_ASSISTANT_SYSTEM_PROMPT}\n${langInstruction}${historyBlock}\nUser question: ${question}`;
+    const fullPrompt = `${VOICE_ASSISTANT_SYSTEM_PROMPT}${nameContext}\n${langInstruction}${historyBlock}\nUser question: ${question}`;
     const polRes = await axios.get(
       `https://text.pollinations.ai/${encodeURIComponent(fullPrompt)}`,
       { timeout: 10000, responseType: "text" }
@@ -2909,8 +3063,8 @@ app.post("/ask", async (req, res) => {
     const polAnswer = (polRes.data || "").toString().trim();
     if (polAnswer && polAnswer.length > 20) {
       console.log("✅ Pollinations Text replied");
-      req.session.conversation.push({ role: "user", content: question });
-      req.session.conversation.push({ role: "assistant", content: polAnswer });
+      saveMessage(req, "user", question);
+      saveMessage(req, "assistant", polAnswer);
       return res.json({ success: true, reply: polAnswer });
     }
   } catch (polErr) {
@@ -2920,8 +3074,8 @@ app.post("/ask", async (req, res) => {
   // 1.6 🧠 ChatGPT Brain (FALLBACK — GPT-4o by OpenAI)
   const chatgptReply = await buildChatGPTReply(question, conversationHistory);
   if (chatgptReply) {
-    req.session.conversation.push({ role: "user", content: question });
-    req.session.conversation.push({ role: "assistant", content: chatgptReply });
+    saveMessage(req, "user", question);
+    saveMessage(req, "assistant", chatgptReply);
     return res.json({ success: true, reply: chatgptReply });
   }
 
@@ -2930,8 +3084,8 @@ app.post("/ask", async (req, res) => {
   // Runs only if ChatGPT is unavailable. Falls through to Tavily if Gemini also fails.
   const smartReply = await buildSmartReply(question, conversationHistory, detectedLang);
   if (smartReply) {
-    req.session.conversation.push({ role: "user", content: question });
-    req.session.conversation.push({ role: "assistant", content: smartReply });
+    saveMessage(req, "user", question);
+    saveMessage(req, "assistant", smartReply);
     return res.json({ success: true, reply: smartReply });
   }
 
@@ -2987,9 +3141,9 @@ app.post("/ask", async (req, res) => {
         : "Sorry, I couldn't find a 10-point answer. Please try rephrasing.";
     }
 
-    // Update conversation memory
-    req.session.conversation.push({ role: "user", content: question });
-    req.session.conversation.push({ role: "assistant", content: reply });
+    // Update this user's per-session memory (isolated per user)
+    saveMessage(req, "user", question);
+    saveMessage(req, "assistant", reply);
     return res.json({ success: true, reply });
   } catch (tavilyErr) {
     console.error("Tavily error:", tavilyErr.message);
@@ -3005,17 +3159,17 @@ app.post("/ask", async (req, res) => {
           : "Answer in English.";
         const tenseInstruction = `The user's question is in ${tense} tense. Please respond in the same tense (${tense}) as the user.`;
         const ranaiPersona = VOICE_ASSISTANT_SYSTEM_PROMPT.trim();
-        // Build conversation context
+        // Build conversation context (this user's history only)
         let context = "";
         if (conversationHistory.length > 0) {
           context = "Previous conversation:\n" + conversationHistory.map(msg => `${msg.role}: ${msg.content}`).join("\n") + "\n\n";
         }
-        const prompt = `${ranaiPersona}\n\n${langInstruction} ${tenseInstruction}\n\n${context}User: ${question}`;
+        const prompt = `${ranaiPersona}${nameContext}\n\n${langInstruction} ${tenseInstruction}\n\n${context}User: ${question}`;
         const result = await model.generateContent(prompt);
         const geminiReply = result.response.text();
 
-        req.session.conversation.push({ role: "user", content: question });
-        req.session.conversation.push({ role: "assistant", content: geminiReply });
+        saveMessage(req, "user", question);
+        saveMessage(req, "assistant", geminiReply);
         return res.json({ success: true, reply: geminiReply });
       } catch (geminiErr) {
         console.error("Gemini fallback error:", geminiErr.message);
@@ -3256,6 +3410,19 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "../client/index.html"));
 });
 
+// ========== 🧹 CLEAR MEMORY ENDPOINT ==========
+// Clears only the current user's session memory (name + chat history).
+// Other users are completely unaffected.
+app.post("/clear-memory", (req, res) => {
+  try {
+    clearMemory(req);
+    console.log("🧹 Memory cleared for a user session");
+    res.json({ success: true, message: "Your memory has been cleared. Fresh start! 😊" });
+  } catch (err) {
+    res.status(500).json({ success: false, error: "Could not clear memory." });
+  }
+});
+
 // ========== GLOBAL ERROR HANDLER ==========
 app.use((err, req, res, _next) => {
   console.error("Unhandled error:", err.message);
@@ -3273,11 +3440,13 @@ app.listen(PORT, () => {
   console.log(`✅ Gemini Vision ready`);
   console.log(`🧮 Advanced math solver active`);
   console.log(`🇮🇳 Real-time India info active (fixed timezone)`);
-  console.log(`💬 Human-like conversation with memory`);
+  console.log(`💬 Human-like conversation with PER-USER memory isolation ✅`);
+  console.log(`🧠 Name detection: English + Hinglish patterns enabled`);
   console.log(`⏱️ Tense matching enabled`);
   console.log(`🔟 10-point internet answers enabled`);
   console.log(`🌐 Multilingual (EN/HI/Hinglish)`);
   console.log(`📚 Loaded ${Object.keys(conversationalData).length} conversational Q&A pairs`);
   console.log(`🌦️ Live weather endpoint: GET /weather?city=CityName`);
   console.log(`🕒 India time endpoint: GET /time`);
+  console.log(`🧹 Clear memory endpoint: POST /clear-memory`);
 });
