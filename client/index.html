@@ -225,6 +225,10 @@
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#00e887" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>
               <span>Jobs</span>
             </button>
+            <button class="tool-btn tool-btn-label" id="sarkariJobsBtn" style="color:#fbbf24;" title="Sarkari Government Jobs">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+              <span>Sarkari</span>
+            </button>
           </div>
           <div class="input-send-area">
             <button class="tool-btn mic-btn" id="micBtn" title="Voice input">
@@ -313,18 +317,22 @@
   </div>
 
   <!-- ═══ JOB FINDER MODAL ═══ -->
-  <div id="jfOverlay" style="display:none;position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.82);backdrop-filter:blur(8px);align-items:center;justify-content:center;padding:16px;">
+  <div id="jfOverlay" style="display:none;position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.8);backdrop-filter:blur(8px);align-items:center;justify-content:center;padding:16px;">
     <div id="jfBox" style="width:100%;max-width:600px;max-height:92vh;overflow-y:auto;background:rgba(6,8,12,0.99);border:1px solid rgba(0,232,135,0.2);border-radius:24px;padding:28px;box-shadow:0 0 100px rgba(0,232,135,0.07),0 40px 90px rgba(0,0,0,0.9);position:relative;">
       <div style="position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(0,232,135,0.65),transparent);border-radius:24px 24px 0 0;pointer-events:none;"></div>
 
       <!-- Header -->
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:24px;">
-        <img src="LOGO.png" style="width:42px;height:42px;border-radius:50%;border:2px solid rgba(0,232,135,0.4);flex-shrink:0;" alt="RanAI"/>
+        <div style="position:relative;width:44px;height:44px;flex-shrink:0;">
+          <div style="position:absolute;inset:-3px;border-radius:50%;background:conic-gradient(#00e887,#3b82f6,#00e887);animation:jfring 3s linear infinite;filter:blur(1px);"></div>
+          <div style="position:absolute;inset:2px;border-radius:50%;background:#060810;"></div>
+          <img src="LOGO.png" style="position:absolute;inset:2px;width:calc(100% - 4px);height:calc(100% - 4px);border-radius:50%;object-fit:cover;z-index:1;" alt="RanAI"/>
+        </div>
         <div>
           <div style="font-size:17px;font-weight:700;background:linear-gradient(135deg,#fff 40%,#00e887 90%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">AI Job Finder</div>
           <div style="font-size:12px;color:#424d5c;margin-top:2px;">Real jobs with apply links • Powered by RanAI</div>
         </div>
-        <button id="jfCloseBtn" style="margin-left:auto;width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);color:#8892a4;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;font-size:20px;line-height:1;">×</button>
+        <button id="jfCloseBtn" style="margin-left:auto;width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);color:#8892a4;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;font-size:20px;line-height:1;transition:.15s;">×</button>
       </div>
 
       <!-- FORM -->
@@ -349,24 +357,30 @@
             <div class="jfield"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:.4;flex-shrink:0"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg><input id="jfExp" class="jinput" placeholder="0" type="number" min="0" max="30" style="-moz-appearance:textfield;"/></div>
           </div>
         </div>
-        <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;flex-wrap:wrap;">
           <span style="font-size:11px;font-weight:700;color:#8892a4;letter-spacing:.06em;text-transform:uppercase;">Language</span>
           <div style="display:flex;gap:4px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.055);border-radius:10px;padding:3px;">
-            <button id="jfLangEn" class="jlangbtn jlang-active">English</button>
+            <button id="jfLangEn" class="jlangbtn active-lang">English</button>
             <button id="jfLangHi" class="jlangbtn">हिंदी</button>
           </div>
         </div>
         <div id="jfErr" style="font-size:12.5px;color:#ff5c7c;min-height:16px;margin-bottom:8px;"></div>
-        <button id="jfFindBtn" style="width:100%;padding:13px;background:linear-gradient(135deg,#00e887,#00c96e);color:#030c07;border-radius:14px;font-size:14px;font-weight:700;cursor:pointer;border:none;display:flex;align-items:center;justify-content:center;gap:9px;box-shadow:0 4px 22px rgba(0,232,135,0.38);transition:opacity .18s;">
+        <button id="jfFindBtn" style="width:100%;padding:13px;background:linear-gradient(135deg,#00e887,#00c96e);color:#030c07;border-radius:14px;font-size:14px;font-weight:700;cursor:pointer;border:none;display:flex;align-items:center;justify-content:center;gap:9px;box-shadow:0 4px 22px rgba(0,232,135,0.38);transition:opacity .18s,transform .15s;">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           Find Real Jobs
         </button>
       </div>
 
       <!-- LOADING -->
-      <div id="jfLoading" style="display:none;flex-direction:column;align-items:center;padding:44px 0;gap:16px;">
-        <div style="width:40px;height:40px;border:2.5px solid rgba(0,232,135,0.1);border-top-color:#00e887;border-radius:50%;animation:jfspin .75s linear infinite;"></div>
-        <div style="color:#8892a4;font-size:14px;font-weight:500;">Searching real jobs…</div>
+      <div id="jfLoading" style="display:none;flex-direction:column;align-items:center;padding:44px 0;gap:18px;">
+        <div style="position:relative;width:52px;height:52px;">
+          <div style="position:absolute;inset:0;border-radius:50%;border:2.5px solid rgba(0,232,135,0.08);border-top-color:#00e887;animation:jfspin .8s linear infinite;"></div>
+          <img src="LOGO.png" style="position:absolute;inset:8px;border-radius:50%;object-fit:cover;" alt=""/>
+        </div>
+        <div style="text-align:center;">
+          <div style="color:#f0f4ff;font-size:14px;font-weight:600;margin-bottom:4px;">Searching real jobs…</div>
+          <div style="color:#424d5c;font-size:12px;">Checking live listings from job portals</div>
+        </div>
       </div>
 
       <!-- RESULTS -->
@@ -383,28 +397,140 @@
         </div>
         <div id="jfCards" style="display:flex;flex-direction:column;gap:10px;"></div>
         <div id="jfTips"></div>
+        <div id="jfSetupNote" style="display:none;background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.2);border-radius:12px;padding:12px 16px;font-size:12.5px;color:#fbbf24;line-height:1.6;"></div>
       </div>
     </div>
   </div>
 
   <style>
   @keyframes jfspin{to{transform:rotate(360deg)}}
-  @keyframes jfcardIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+  @keyframes jfring{to{transform:rotate(360deg)}}
+  @keyframes jfcardIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
   .jfield{display:flex;align-items:center;gap:9px;background:#0a0c10;border:1px solid rgba(255,255,255,0.07);border-radius:10px;padding:11px 13px;color:#424d5c;transition:border-color .2s,box-shadow .2s;}
-  .jfield:focus-within{border-color:rgba(0,232,135,0.4);box-shadow:0 0 0 3px rgba(0,232,135,0.08);}
+  .jfield:focus-within{border-color:rgba(0,232,135,0.4);box-shadow:0 0 0 3px rgba(0,232,135,0.08);color:#00e887;}
   .jinput{flex:1;font-size:13.5px;color:#f0f4ff;background:transparent;border:none;outline:none;min-width:0;font-family:inherit;}
   .jinput::placeholder{color:#424d5c;}
   .jinput[type="number"]::-webkit-inner-spin-button,.jinput[type="number"]::-webkit-outer-spin-button{display:none;}
-  .jlangbtn{padding:6px 16px;border-radius:7px;font-size:12.5px;font-weight:600;cursor:pointer;color:#424d5c;background:transparent;border:none;font-family:inherit;transition:.15s;}
-  .jlang-active{background:rgba(0,232,135,0.12)!important;color:#00e887!important;box-shadow:0 0 0 1px rgba(0,232,135,0.2) inset!important;}
-  .jcard{background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:16px 18px;transition:border-color .2s,background .2s;animation:jfcardIn .3s cubic-bezier(.34,1.2,.64,1) both;}
-  .jcard:hover{border-color:rgba(0,232,135,0.18);background:rgba(0,232,135,0.015);}
-  .jf-apply{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;background:linear-gradient(135deg,#00e887,#00c96e);color:#030c07!important;border-radius:10px;font-size:12.5px;font-weight:700;text-decoration:none!important;box-shadow:0 3px 14px rgba(0,232,135,0.32);white-space:nowrap;transition:opacity .15s,transform .15s;}
-  .jf-apply:hover{opacity:.85;transform:translateY(-1px);text-decoration:none!important;}
-  .jf-portal{display:inline-flex;align-items:center;gap:6px;padding:9px 14px;background:rgba(255,255,255,0.05);color:#8892a4!important;border:1px solid rgba(255,255,255,0.09);border-radius:10px;font-size:12.5px;font-weight:600;text-decoration:none!important;white-space:nowrap;transition:.15s;}
-  .jf-portal:hover{background:rgba(255,255,255,0.09);color:#f0f4ff!important;text-decoration:none!important;}
-  @media(max-width:500px){#jfBox{padding:18px 14px!important;}#jfFormWrap>div:first-child,#jfFormWrap>div:nth-child(2){grid-template-columns:1fr!important;}}
+  .jlangbtn{padding:6px 16px;border-radius:7px;font-size:12.5px;font-weight:600;cursor:pointer;transition:.15s;color:#424d5c;background:transparent;border:none;font-family:inherit;}
+  .active-lang{background:rgba(0,232,135,0.12)!important;color:#00e887!important;box-shadow:0 0 0 1px rgba(0,232,135,0.2) inset!important;}
+  .jcard{background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:16px 18px;transition:border-color .2s,background .2s,box-shadow .2s;animation:jfcardIn .32s cubic-bezier(.34,1.2,.64,1) both;}
+  .jcard:hover{border-color:rgba(0,232,135,0.2);background:rgba(0,232,135,0.018);box-shadow:0 6px 28px rgba(0,0,0,.35);}
+  .jcard.real-job{border-color:rgba(0,232,135,0.1);}
+  .apply-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 18px;background:linear-gradient(135deg,#00e887,#00c96e);color:#030c07;border-radius:9px;font-size:12.5px;font-weight:700;text-decoration:none;transition:opacity .15s,transform .15s;box-shadow:0 3px 14px rgba(0,232,135,0.3);white-space:nowrap;}
+  .apply-btn:hover{opacity:.87;transform:translateY(-1px);text-decoration:none;}
+  .apply-btn-ghost{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;background:rgba(255,255,255,0.04);color:#8892a4;border:1px solid rgba(255,255,255,0.08);border-radius:9px;font-size:12.5px;font-weight:600;text-decoration:none;transition:.15s;white-space:nowrap;}
+  .apply-btn-ghost:hover{background:rgba(255,255,255,0.08);color:#f0f4ff;text-decoration:none;}
+  @media(max-width:520px){#jfBox{padding:18px 14px!important;} #jfFormWrap>div:first-child,#jfFormWrap>div:nth-child(2){grid-template-columns:1fr!important;}}
   </style>
+
+
+  <!-- ═══ SARKARI JOBS MODAL ═══ -->
+  <div id="sjOverlay" style="display:none;position:fixed;inset:0;z-index:9600;background:rgba(0,0,0,0.85);backdrop-filter:blur(10px);align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;">
+    <div class="sj-modal" style="width:100%;max-width:640px;margin:auto;background:rgba(8,10,14,0.98);border:1px solid rgba(251,191,36,0.15);border-radius:24px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,0.8),0 0 60px rgba(251,191,36,0.05);position:relative;">
+      <!-- Top shimmer -->
+      <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,#fbbf24,#f59e0b,transparent);"></div>
+
+      <!-- Header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:20px 22px 16px;border-bottom:1px solid rgba(255,255,255,0.06);">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div style="width:40px;height:40px;border-radius:12px;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.25);display:flex;align-items:center;justify-content:center;font-size:20px;">🏛️</div>
+          <div>
+            <div style="font-size:17px;font-weight:700;background:linear-gradient(135deg,#fff 40%,#fbbf24 90%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">Sarkari Job Finder</div>
+            <div style="font-size:11.5px;color:#8892a4;">SSC · Railway · Banking · Police · Army · Teaching</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="display:flex;gap:4px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);border-radius:10px;padding:3px;">
+            <button id="sjLangHi" class="sj-lang-btn active-lang" style="padding:5px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;border:none;transition:.2s;">हिंदी</button>
+            <button id="sjLangEn" class="sj-lang-btn" style="padding:5px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;border:none;transition:.2s;">EN</button>
+          </div>
+          <button id="sjCloseBtn" style="width:32px;height:32px;border-radius:8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);color:#8892a4;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;transition:.2s;">✕</button>
+        </div>
+      </div>
+
+      <!-- Form -->
+      <div id="sjFormWrap" style="padding:20px 22px;">
+        <!-- Live badge -->
+        <div style="display:flex;align-items:center;gap:8px;background:rgba(0,232,135,0.05);border:1px solid rgba(0,232,135,0.12);border-radius:10px;padding:10px 14px;margin-bottom:18px;">
+          <span style="width:7px;height:7px;border-radius:50%;background:#00e887;display:inline-block;animation:pulse 1.2s ease infinite;flex-shrink:0;"></span>
+          <span style="font-size:12.5px;color:#8892a4;line-height:1.4;">Real-time data from <strong style="color:#f0f4ff;">sarkariresult.com</strong>, SSC, Railway, UPSC & more government portals via AI search</span>
+        </div>
+
+        <!-- Category filter -->
+        <div style="margin-bottom:18px;">
+          <div style="font-size:11.5px;font-weight:700;color:#8892a4;letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px;">Job Category</div>
+          <div id="sjCatWrap" style="display:flex;flex-wrap:wrap;gap:7px;"></div>
+        </div>
+
+        <!-- Qualification + State row -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px;">
+          <div>
+            <div style="font-size:11.5px;font-weight:700;color:#8892a4;letter-spacing:.06em;text-transform:uppercase;margin-bottom:7px;">Qualification</div>
+            <select id="sjQual" style="width:100%;background:#0a0c10;border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:11px 14px;font-size:13.5px;color:#f0f4ff;cursor:pointer;appearance:none;font-family:inherit;outline:none;">
+              <option value="any">Any</option>
+              <option value="10th Pass">10th Pass</option>
+              <option value="12th Pass">12th Pass</option>
+              <option value="Graduate">Graduate</option>
+              <option value="B.Ed">B.Ed (Teaching)</option>
+              <option value="Engineering">Engineering (B.Tech)</option>
+              <option value="Post Graduate">Post Graduate</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:11.5px;font-weight:700;color:#8892a4;letter-spacing:.06em;text-transform:uppercase;margin-bottom:7px;">State / Region</div>
+            <select id="sjState" style="width:100%;background:#0a0c10;border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:11px 14px;font-size:13.5px;color:#f0f4ff;cursor:pointer;appearance:none;font-family:inherit;outline:none;">
+              <option value="all">All India</option>
+              <option value="Uttar Pradesh">Uttar Pradesh</option>
+              <option value="Bihar">Bihar</option>
+              <option value="Rajasthan">Rajasthan</option>
+              <option value="Madhya Pradesh">Madhya Pradesh</option>
+              <option value="Maharashtra">Maharashtra</option>
+              <option value="Delhi">Delhi / NCR</option>
+              <option value="Haryana">Haryana</option>
+              <option value="Punjab">Punjab</option>
+              <option value="Gujarat">Gujarat</option>
+              <option value="Karnataka">Karnataka</option>
+              <option value="Tamil Nadu">Tamil Nadu</option>
+              <option value="West Bengal">West Bengal</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="sjErr" style="font-size:12.5px;color:#ff5c7c;min-height:16px;margin-bottom:8px;"></div>
+
+        <button id="sjFindBtn" style="width:100%;padding:14px;border-radius:12px;background:linear-gradient(135deg,#fbbf24,#f59e0b);color:#1a0e00;font-size:14.5px;font-weight:700;cursor:pointer;border:none;display:flex;align-items:center;justify-content:center;gap:9px;font-family:inherit;transition:.2s;box-shadow:0 4px 24px rgba(251,191,36,0.35);">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          सरकारी Jobs ढूंढो
+        </button>
+      </div>
+
+      <!-- Loading -->
+      <div id="sjLoading" style="display:none;flex-direction:column;align-items:center;gap:16px;padding:48px 22px;">
+        <div style="position:relative;width:56px;height:56px;">
+          <div style="position:absolute;inset:0;border-radius:50%;border:2px solid rgba(251,191,36,0.1);"></div>
+          <div style="position:absolute;inset:0;border-radius:50%;border:2px solid transparent;border-top-color:#fbbf24;animation:spin 0.9s linear infinite;"></div>
+          <div style="position:absolute;inset:8px;border-radius:50%;background:rgba(251,191,36,0.08);display:flex;align-items:center;justify-content:center;font-size:20px;">🏛️</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:14px;font-weight:600;color:#f0f4ff;margin-bottom:4px;">Searching Sarkari Jobs...</div>
+          <div style="font-size:12px;color:#8892a4;">SSC · Railway · Banking · Police · Teaching portals</div>
+        </div>
+      </div>
+
+      <!-- Results -->
+      <div id="sjResults" style="display:none;padding:0 22px 22px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 0 14px;border-bottom:1px solid rgba(255,255,255,0.05);margin-bottom:16px;">
+          <div>
+            <div id="sjMsg" style="font-size:14.5px;font-weight:700;color:#f0f4ff;"></div>
+            <div id="sjSubMsg" style="font-size:12px;color:#8892a4;margin-top:2px;"></div>
+          </div>
+          <button id="sjBackBtn" style="padding:7px 14px;border-radius:10px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);color:#8892a4;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;transition:.2s;">← Back</button>
+        </div>
+        <div id="sjCards" style="display:flex;flex-direction:column;gap:12px;"></div>
+        <div id="sjTips" style="margin-top:14px;display:none;"></div>
+      </div>
+    </div>
+  </div>
 
   <script src="script.js"></script>
 </body>
