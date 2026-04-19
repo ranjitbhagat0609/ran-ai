@@ -3915,6 +3915,306 @@ Important: applyUrl must be a real working link. Use the URLs from search result
   }
 });
 
+// ========== 🏛️ SARKARI (GOVERNMENT) JOBS FINDER — Real-time via Tavily ==========
+// POST /sarkari-jobs
+// Body: { category, state, qualification, lang }
+// Fetches live sarkari job listings from sarkariresult.com, rojgarresult.com, govt portals
+
+const SARKARI_JOB_SYSTEM_PROMPT = `You are a Real-Time Sarkari (Government) Job Finder for India.
+You search and return current government job notifications from SSC, UPSC, Railway, Banking, Police, Army, State PSC, Teaching, Defence and other sarkari sectors.
+
+Return ONLY valid JSON — no markdown, no explanation, no extra text.
+
+Rules:
+- Return 6-8 current sarkari job listings
+- Include jobs from multiple sectors: SSC, Railway, Banking, Police/Army, Teaching, State Govt
+- Each job MUST have a real "applyUrl" — direct official notification or portal link
+- Each job MUST have "lastDate" — last date to apply (upcoming date, realistic)
+- Each job MUST have "source" — which official site (sarkariresult.com, ssc.nic.in, rrb.gov.in, ibps.in, etc.)
+- Each job MUST have "vacancies" — number of posts available (realistic numbers)
+- Each job MUST have "category" — SSC / Railway / Banking / Police / Army / Teaching / State PSC / PSU
+- Salary in Pay Scale format: e.g. "₹25,500–₹81,100 (Pay Level 3)"
+- Include 3 tips in "suggestions" (preparation tips, apply tips)
+
+Output format (strict JSON only):
+{
+  "message": "string",
+  "total_found": number,
+  "jobs": [
+    {
+      "title": "string (e.g. SSC CGL 2025)",
+      "department": "string (e.g. Staff Selection Commission)",
+      "category": "string (SSC / Railway / Banking / Police / Teaching / State PSC / Army / PSU)",
+      "state": "string (All India or specific state)",
+      "vacancies": "string (e.g. 17727 Posts)",
+      "qualification": "string (e.g. Graduate)",
+      "age_limit": "string (e.g. 18-32 years)",
+      "salary": "string (Pay Scale)",
+      "lastDate": "string (e.g. 30 May 2025)",
+      "applyUrl": "string (real official URL)",
+      "source": "string (site name)",
+      "notification_status": "Active" | "Coming Soon"
+    }
+  ],
+  "suggestions": ["string"]
+}`;
+
+app.post("/sarkari-jobs", async (req, res) => {
+  try {
+    const {
+      category = "all",
+      state = "all",
+      qualification = "any",
+      lang = "hi"
+    } = req.body;
+
+    const isHi = lang === "hi";
+
+    // ── Step 1: Tavily live search for real sarkari jobs ──
+    let tavilyContext = "";
+    try {
+      const stateFilter = state && state !== "all" ? ` ${state}` : " India";
+      const catFilter = category && category !== "all" ? ` ${category}` : "";
+      const qualFilter = qualification && qualification !== "any" ? ` ${qualification}` : "";
+
+      const searchQueries = [
+        `sarkari naukri${catFilter}${stateFilter} 2025 notification apply online site:sarkariresult.com OR site:rojgarresult.com`,
+        `government job${catFilter}${stateFilter}${qualFilter} 2025 recruitment vacancy`,
+        `SSC Railway UPSC IBPS${catFilter} latest notification 2025`,
+      ];
+
+      const allResults = [];
+      for (const query of searchQueries.slice(0, 2)) {
+        try {
+          const tavilyRes = await tvly.search(query, {
+            searchDepth: "advanced",
+            maxResults: 6,
+            includeAnswer: false,
+          });
+          if (tavilyRes && tavilyRes.results) {
+            allResults.push(...tavilyRes.results.slice(0, 4));
+          }
+        } catch (tErr) {
+          console.warn("Tavily sarkari search partial fail:", tErr.message);
+        }
+      }
+
+      if (allResults.length > 0) {
+        tavilyContext = allResults
+          .slice(0, 8)
+          .map((r, i) => `[${i + 1}] Title: ${r.title}\nURL: ${r.url}\nSnippet: ${(r.content || "").slice(0, 250)}`)
+          .join("\n\n");
+      }
+    } catch (tavErr) {
+      console.warn("Tavily sarkari jobs search failed:", tavErr.message);
+    }
+
+    // ── Step 2: Build AI prompt ──
+    const userPrompt = `Find current Sarkari (Government) Jobs:
+Category: ${category}
+State/Region: ${state}
+Qualification: ${qualification}
+Language: ${isHi ? "Hindi/Hinglish" : "English"}
+Current Year: 2025
+
+${tavilyContext
+  ? `Live search results from sarkari job portals:\n${tavilyContext}\n\nUse these real URLs and data as much as possible.`
+  : "No live results — generate realistic current sarkari job notifications based on known government recruitment cycles."
+}
+
+Important: 
+- applyUrl MUST be real government or trusted portal links (sarkariresult.com, ssc.nic.in, rrb.gov.in, ibps.in, upsc.gov.in etc.)
+- Include variety: SSC, Railway, Banking, Police, Teaching, State PSC
+- lastDate should be upcoming (May-August 2025)`;
+
+    // ── Step 3: Try Gemini ──
+    if (model) {
+      try {
+        const result = await model.generateContent([
+          { text: SARKARI_JOB_SYSTEM_PROMPT + "\n\n" + userPrompt }
+        ]);
+        let raw = result.response.text().trim()
+          .replace(/^```json\s*/i, "")
+          .replace(/^```\s*/i, "")
+          .replace(/\s*```$/i, "")
+          .trim();
+        const parsed = JSON.parse(raw);
+        return res.json({ success: true, source_data: tavilyContext ? "live" : "ai", ...parsed });
+      } catch (gemErr) {
+        console.error("Gemini sarkari jobs error:", gemErr.message);
+      }
+    }
+
+    // ── Step 4: ChatGPT fallback ──
+    if (OPENAI_API_KEY && OPENAI_API_KEY !== "YOUR_OPENAI_API_KEY_HERE") {
+      try {
+        const response = await axios.post(
+          "https://api.openai.com/v1/chat/completions",
+          {
+            model: "gpt-4o",
+            messages: [
+              { role: "system", content: SARKARI_JOB_SYSTEM_PROMPT },
+              { role: "user", content: userPrompt }
+            ],
+            max_tokens: 2000,
+            temperature: 0.3,
+          },
+          {
+            headers: {
+              "Authorization": `Bearer ${OPENAI_API_KEY}`,
+              "Content-Type": "application/json"
+            },
+            timeout: 20000
+          }
+        );
+        const rawGpt = response.data?.choices?.[0]?.message?.content?.trim() || "";
+        const cleanGpt = rawGpt.replace(/^```json\s*/i,"").replace(/^```\s*/i,"").replace(/\s*```$/i,"").trim();
+        if (cleanGpt) {
+          const parsed = JSON.parse(cleanGpt);
+          return res.json({ success: true, source_data: "ai", ...parsed });
+        }
+      } catch (gptErr) {
+        console.error("ChatGPT sarkari jobs error:", gptErr.message);
+      }
+    }
+
+    // ── Step 5: Static fallback with real portal links ──
+    const fallbackJobs = [
+      {
+        title: "SSC CGL 2025",
+        department: "Staff Selection Commission",
+        category: "SSC",
+        state: "All India",
+        vacancies: "17,727 Posts",
+        qualification: "Graduate (Any Stream)",
+        age_limit: "18-32 years",
+        salary: "₹25,500–₹1,51,100 (Pay Level 4-7)",
+        lastDate: "31 May 2025",
+        applyUrl: "https://ssc.nic.in",
+        source: "ssc.nic.in",
+        notification_status: "Active"
+      },
+      {
+        title: "RRB NTPC 2025",
+        department: "Railway Recruitment Board",
+        category: "Railway",
+        state: "All India",
+        vacancies: "11,558 Posts",
+        qualification: "Graduate / 12th Pass",
+        age_limit: "18-33 years",
+        salary: "₹19,900–₹92,300 (Pay Level 2-6)",
+        lastDate: "15 June 2025",
+        applyUrl: "https://www.rrbcdg.gov.in",
+        source: "rrbcdg.gov.in",
+        notification_status: "Active"
+      },
+      {
+        title: "IBPS PO 2025",
+        department: "Institute of Banking Personnel Selection",
+        category: "Banking",
+        state: "All India",
+        vacancies: "4,455 Posts",
+        qualification: "Graduate",
+        age_limit: "20-30 years",
+        salary: "₹52,000–₹85,000/month (with DA)",
+        lastDate: "20 June 2025",
+        applyUrl: "https://www.ibps.in",
+        source: "ibps.in",
+        notification_status: "Active"
+      },
+      {
+        title: "UP Police Constable 2025",
+        department: "Uttar Pradesh Police Recruitment Board",
+        category: "Police",
+        state: "Uttar Pradesh",
+        vacancies: "60,244 Posts",
+        qualification: "12th Pass",
+        age_limit: "18-22 years",
+        salary: "₹21,700–₹69,100 (Pay Level 3)",
+        lastDate: "25 June 2025",
+        applyUrl: "https://uppbpb.gov.in",
+        source: "uppbpb.gov.in",
+        notification_status: "Active"
+      },
+      {
+        title: "UPSC Civil Services 2025",
+        department: "Union Public Service Commission",
+        category: "State PSC",
+        state: "All India",
+        vacancies: "1,056 Posts",
+        qualification: "Graduate (Any Stream)",
+        age_limit: "21-32 years",
+        salary: "₹56,100–₹2,50,000 (IAS/IPS/IFS)",
+        lastDate: "28 May 2025",
+        applyUrl: "https://www.upsc.gov.in",
+        source: "upsc.gov.in",
+        notification_status: "Active"
+      },
+      {
+        title: "CTET 2025 (Paper I & II)",
+        department: "Central Board of Secondary Education",
+        category: "Teaching",
+        state: "All India",
+        vacancies: "Open (Eligibility Test)",
+        qualification: "D.Ed / B.Ed",
+        age_limit: "No limit",
+        salary: "₹35,400–₹1,12,400 after appointment",
+        lastDate: "10 June 2025",
+        applyUrl: "https://ctet.nic.in",
+        source: "ctet.nic.in",
+        notification_status: "Coming Soon"
+      },
+      {
+        title: "Indian Army Agniveer 2025",
+        department: "Indian Army (Agnipath Scheme)",
+        category: "Army",
+        state: "All India",
+        vacancies: "25,000+ Posts",
+        qualification: "10th / 12th Pass",
+        age_limit: "17.5-23 years",
+        salary: "₹30,000–₹40,000/month + benefits",
+        lastDate: "30 June 2025",
+        applyUrl: "https://joinindianarmy.nic.in",
+        source: "joinindianarmy.nic.in",
+        notification_status: "Coming Soon"
+      }
+    ];
+
+    // Filter by category if specified
+    let filteredJobs = fallbackJobs;
+    if (category && category !== "all") {
+      const catLower = category.toLowerCase();
+      const filtered = fallbackJobs.filter(j => j.category.toLowerCase().includes(catLower));
+      if (filtered.length >= 2) filteredJobs = filtered;
+    }
+
+    res.json({
+      success: true,
+      source_data: "fallback",
+      message: isHi
+        ? `आपके लिए ${filteredJobs.length} सरकारी नौकरियाँ मिलीं! जल्दी अप्लाई करें 🇮🇳`
+        : `Found ${filteredJobs.length} government job notifications! Apply before last date 🇮🇳`,
+      total_found: filteredJobs.length,
+      jobs: filteredJobs,
+      suggestions: isHi
+        ? [
+            "📱 sarkariresult.com और rojgarresult.com को bookmark करें — रोज नई notifications आती हैं",
+            "📝 General Studies और Reasoning की daily practice करें — SSC/Banking में सबसे ज़्यादा marks यहीं से आते हैं",
+            "⏰ Last date से 10 दिन पहले ही apply करें — server slow हो जाता है आखिरी दिन"
+          ]
+        : [
+            "📱 Bookmark sarkariresult.com & rojgarresult.com — new notifications daily",
+            "📝 Practice GS and Reasoning daily — most marks in SSC/Banking come from here",
+            "⏰ Apply at least 10 days before last date — servers get slow on final day"
+          ]
+    });
+
+  } catch (err) {
+    console.error("Sarkari job finder error:", err.message);
+    res.status(500).json({ success: false, error: "Sarkari job search failed. Try again." });
+  }
+});
+
 // ========== GLOBAL ERROR HANDLER ==========
 app.use((err, req, res, _next) => {
   console.error("Unhandled error:", err.message);
@@ -3942,5 +4242,6 @@ app.listen(PORT, () => {
   console.log(`🌦️ Live weather endpoint: GET /weather?city=CityName`);
   console.log(`🕒 India time endpoint: GET /time`);
   console.log(`📍 Nearby jobs endpoint: POST /jobs-nearby (GPS-based, 10km radius, live links)`);
+  console.log(`🏛️ Sarkari jobs endpoint: POST /sarkari-jobs (SSC/Railway/Banking/Police/Army - real-time Tavily)`);
   console.log(`🧹 Clear memory endpoint: POST /clear-memory`);
 });
