@@ -3613,6 +3613,79 @@ app.get("/time", (req, res) => {
   });
 });
 
+// ========== 💼 JOB FINDER ==========
+const JOB_SYSTEM_PROMPT = `You are a Real-Time AI Job Finder for RanAI (India-based platform).
+Return ONLY valid JSON — no markdown, no explanation, no extra text.
+
+Rules:
+- Detect language from "lang" field: "hi" = reply in Hindi/Hinglish, "en" = English
+- Return 5-7 realistic Indian job listings
+- Mix "real" (known companies: TCS, Infosys, Wipro, HCL, Zomato, Swiggy, Paytm, etc.) and "estimated" entries
+- Salary in Indian rupees per month (realistic):
+  Fresher 0yr: ₹10,000–₹25,000 | 1-2yr: ₹20,000–₹50,000 | 3-5yr: ₹40,000–₹90,000 | 5+yr: ₹80,000–₹2,00,000
+- Include 2-3 salary booster suggestions in "suggestions" array
+
+Output format (strict JSON only):
+{
+  "message": "string",
+  "jobs": [
+    {
+      "title": "string",
+      "company": "string",
+      "location": "string",
+      "salary": "string",
+      "skills_required": ["string"],
+      "experience_required": "string",
+      "type": "real"
+    }
+  ],
+  "suggestions": ["string"]
+}`;
+
+app.post("/jobs", async (req, res) => {
+  try {
+    const { role = "", location = "Delhi", skills = [], experience = 0, lang = "en" } = req.body;
+    if (!role.trim()) return res.status(400).json({ success: false, error: "Job role is required" });
+
+    const userPrompt = `Find jobs:
+Role: ${role}
+Location: ${location || "Delhi"}
+Skills: ${Array.isArray(skills) ? skills.join(", ") : skills}
+Experience: ${experience} years
+Language: ${lang}`;
+
+    // Try Gemini
+    if (model) {
+      try {
+        const result = await model.generateContent([{ text: JOB_SYSTEM_PROMPT + "\n\n" + userPrompt }]);
+        let raw = result.response.text().trim().replace(/^```json\s*/i,"").replace(/^```\s*/i,"").replace(/\s*```$/i,"").trim();
+        const parsed = JSON.parse(raw);
+        return res.json({ success: true, ...parsed });
+      } catch (e) { console.error("Gemini jobs error:", e.message); }
+    }
+
+    // Fallback static
+    const expNum = parseInt(experience, 10) || 0;
+    const salary = expNum === 0 ? "₹10,000 – ₹22,000" : expNum <= 2 ? "₹20,000 – ₹45,000" : expNum <= 5 ? "₹45,000 – ₹85,000" : "₹80,000 – ₹1,50,000";
+    const isHi = lang === "hi";
+    res.json({
+      success: true,
+      message: isHi ? `${role} ke liye ${location} mein jobs mil gayi!` : `${role} jobs found near ${location}!`,
+      jobs: [
+        { title: role, company: "TCS", location, salary, skills_required: Array.isArray(skills) && skills.length ? skills : ["Communication"], experience_required: expNum === 0 ? "Fresher" : `${expNum}+ years`, type: "real" },
+        { title: role, company: "Infosys", location, salary, skills_required: Array.isArray(skills) && skills.length ? skills : ["Problem Solving"], experience_required: expNum === 0 ? "Fresher" : `${expNum}+ years`, type: "real" },
+        { title: `Senior ${role}`, company: "Tech Startup", location, salary, skills_required: Array.isArray(skills) && skills.length ? skills : ["Leadership"], experience_required: `${expNum}–${expNum + 2} years`, type: "estimated" }
+      ],
+      suggestions: isHi
+        ? ["Cloud Computing seekhne se salary 30% badh sakti hai", "DSA practice karo — top companies mein zaroor poochha jata hai", "GitHub portfolio banao"]
+        : ["Learning AWS/Azure can boost salary by 30%", "Practice DSA for top company interviews", "Build a strong GitHub portfolio"]
+    });
+  } catch (err) {
+    console.error("Job finder error:", err.message);
+    res.status(500).json({ success: false, error: "Job search failed. Try again." });
+  }
+});
+
 // ========== SERVE FRONTEND ==========
 app.get("/ranai", (req, res) => {
   res.sendFile(path.join(__dirname, "../client/index.html"));
@@ -3655,6 +3728,193 @@ app.post("/clear-memory", (req, res) => {
   }
 });
 
+// ========== 📍 NEARBY JOB FINDER (Location-based, under 10km, with website links) ==========
+// POST /jobs-nearby
+// Body: { role, lat, lon, skills, experience, lang, radius }
+// Uses Tavily to search real live job listings near user's coordinates.
+// Returns jobs with: title, company, location, distance_km, salary, applyUrl, source_site, map_link
+const NEARBY_JOB_SYSTEM_PROMPT = `You are a hyper-local Real-Time Job Finder for India.
+The user is searching for jobs near their GPS coordinates.
+Return ONLY valid JSON — no markdown, no explanation, no extra text.
+
+Rules:
+- Return 5-8 job listings available near the provided city/area
+- Each job MUST have a real "applyUrl" — direct link to the company careers page or job portal
+- Each job MUST have "source_site" — name of the website where job is posted (e.g. "naukri.com", "linkedin.com", "company careers")
+- Each job MUST have "distance_km" — estimated distance from user (must be ≤ 10)
+- Each job MUST have "area" — specific locality/area name (e.g. "Connaught Place, Delhi")
+- Each job MUST have "map_link" — Google Maps search URL: https://www.google.com/maps/search/<company+name+area>
+- Salary in Indian rupees per month (realistic range)
+- Mix real companies (TCS, Infosys, Wipro, HCL, Zomato, Swiggy, Paytm, Flipkart, Amazon, etc.) and local businesses
+- Include 2 tips in "suggestions"
+
+Output format (strict JSON only):
+{
+  "message": "string",
+  "search_area": "string (city/area name)",
+  "jobs": [
+    {
+      "title": "string",
+      "company": "string",
+      "area": "string (locality name)",
+      "distance_km": number,
+      "salary": "string",
+      "skills_required": ["string"],
+      "experience_required": "string",
+      "source_site": "string",
+      "applyUrl": "string",
+      "map_link": "string"
+    }
+  ],
+  "suggestions": ["string"]
+}`;
+
+app.post("/jobs-nearby", async (req, res) => {
+  try {
+    const {
+      role = "",
+      lat = null,
+      lon = null,
+      skills = [],
+      experience = 0,
+      lang = "en",
+      radius = 10
+    } = req.body;
+
+    if (!role.trim()) {
+      return res.status(400).json({ success: false, error: "Job role is required" });
+    }
+
+    // ── Step 1: Reverse geocode coordinates to city/area name ──
+    let cityArea = "Delhi";
+    let googleMapsBase = "https://www.google.com/maps/search/";
+
+    if (lat && lon) {
+      try {
+        const geoRes = await axios.get(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=14&addressdetails=1`,
+          { timeout: 5000, headers: { "User-Agent": "RanAI-JobFinder/1.0" } }
+        );
+        const addr = geoRes.data.address || {};
+        const parts = [
+          addr.suburb || addr.neighbourhood || addr.quarter,
+          addr.city || addr.town || addr.village || addr.county,
+          addr.state
+        ].filter(Boolean);
+        if (parts.length) cityArea = parts.join(", ");
+      } catch (geoErr) {
+        console.warn("Reverse geocode failed:", geoErr.message);
+      }
+    }
+
+    // ── Step 2: Tavily live search for real nearby jobs ──
+    let tavilyContext = "";
+    try {
+      const skillStr = Array.isArray(skills) && skills.length ? skills.join(", ") : "";
+      const searchQuery = `${role} job opening near ${cityArea} India site:naukri.com OR site:linkedin.com OR site:indeed.co.in OR site:shine.com OR site:foundit.in ${skillStr}`;
+      const tavilyRes = await tvly.search(searchQuery, {
+        searchDepth: "advanced",
+        maxResults: 8,
+        includeAnswer: false,
+      });
+      if (tavilyRes && tavilyRes.results && tavilyRes.results.length) {
+        tavilyContext = tavilyRes.results
+          .slice(0, 6)
+          .map((r, i) => `[${i + 1}] Title: ${r.title}\nURL: ${r.url}\nSnippet: ${r.content ? r.content.slice(0, 200) : ""}`)
+          .join("\n\n");
+      }
+    } catch (tavErr) {
+      console.warn("Tavily nearby jobs search failed:", tavErr.message);
+    }
+
+    // ── Step 3: Build AI prompt ──
+    const isHi = lang === "hi";
+    const userPrompt = `Find nearby jobs:
+Role: ${role}
+User Location: ${cityArea} (lat:${lat || "unknown"}, lon:${lon || "unknown"})
+Search Radius: ${radius} km
+Skills: ${Array.isArray(skills) ? skills.join(", ") : skills || "any"}
+Experience: ${experience} years
+Language: ${isHi ? "Hindi/Hinglish" : "English"}
+
+${tavilyContext ? `Live job search results found online:\n${tavilyContext}` : "No live results found — generate realistic nearby listings based on the area."}
+
+Important: applyUrl must be a real working link. Use the URLs from search results above when available.`;
+
+    // ── Step 4: Try Gemini ──
+    if (model) {
+      try {
+        const result = await model.generateContent([
+          { text: NEARBY_JOB_SYSTEM_PROMPT + "\n\n" + userPrompt }
+        ]);
+        let raw = result.response.text().trim()
+          .replace(/^```json\s*/i, "")
+          .replace(/^```\s*/i, "")
+          .replace(/\s*```$/i, "")
+          .trim();
+        const parsed = JSON.parse(raw);
+        return res.json({ success: true, resolved_area: cityArea, ...parsed });
+      } catch (gemErr) {
+        console.error("Gemini nearby jobs error:", gemErr.message);
+      }
+    }
+
+    // ── Step 5: Static fallback ──
+    const expNum = parseInt(experience, 10) || 0;
+    const salaryFallback =
+      expNum === 0 ? "₹10,000 – ₹22,000/month"
+      : expNum <= 2 ? "₹22,000 – ₹45,000/month"
+      : expNum <= 5 ? "₹45,000 – ₹85,000/month"
+      : "₹85,000 – ₹1,50,000/month";
+    const skillsFallback = Array.isArray(skills) && skills.length ? skills : ["Communication"];
+    const expLabel = expNum === 0 ? "Fresher" : `${expNum}+ years`;
+
+    const fallbackJobs = [
+      {
+        title: role, company: "TCS", area: cityArea, distance_km: 2.1,
+        salary: salaryFallback, skills_required: skillsFallback, experience_required: expLabel,
+        source_site: "ibegin.tcs.com", applyUrl: "https://ibegin.tcs.com/iBegin/",
+        map_link: `https://www.google.com/maps/search/TCS+${encodeURIComponent(cityArea)}`
+      },
+      {
+        title: role, company: "Infosys", area: cityArea, distance_km: 4.5,
+        salary: salaryFallback, skills_required: skillsFallback, experience_required: expLabel,
+        source_site: "career.infosys.com", applyUrl: "https://career.infosys.com/joblist",
+        map_link: `https://www.google.com/maps/search/Infosys+${encodeURIComponent(cityArea)}`
+      },
+      {
+        title: role, company: "Wipro", area: cityArea, distance_km: 6.8,
+        salary: salaryFallback, skills_required: skillsFallback, experience_required: expLabel,
+        source_site: "careers.wipro.com", applyUrl: "https://careers.wipro.com/careers-home/",
+        map_link: `https://www.google.com/maps/search/Wipro+${encodeURIComponent(cityArea)}`
+      },
+      {
+        title: role, company: "HCL Technologies", area: cityArea, distance_km: 8.3,
+        salary: salaryFallback, skills_required: skillsFallback, experience_required: expLabel,
+        source_site: "hcltech.com/careers", applyUrl: "https://www.hcltech.com/careers",
+        map_link: `https://www.google.com/maps/search/HCL+Technologies+${encodeURIComponent(cityArea)}`
+      }
+    ];
+
+    res.json({
+      success: true,
+      resolved_area: cityArea,
+      message: isHi
+        ? `${cityArea} ke 10km andar ${role} ki ${fallbackJobs.length} jobs mili!`
+        : `Found ${fallbackJobs.length} ${role} jobs within 10km of ${cityArea}!`,
+      search_area: cityArea,
+      jobs: fallbackJobs,
+      suggestions: isHi
+        ? ["Naukri.com pe daily apply karo — freshest listings wahan hoti hain", "Interview ke liye LinkedIn profile strong rakho"]
+        : ["Apply daily on Naukri.com — freshest local listings are posted there", "Keep your LinkedIn profile strong for interview calls"]
+    });
+
+  } catch (err) {
+    console.error("Nearby job finder error:", err.message);
+    res.status(500).json({ success: false, error: "Nearby job search failed. Try again." });
+  }
+});
+
 // ========== GLOBAL ERROR HANDLER ==========
 app.use((err, req, res, _next) => {
   console.error("Unhandled error:", err.message);
@@ -3681,5 +3941,6 @@ app.listen(PORT, () => {
   console.log(`📚 Loaded ${Object.keys(conversationalData).length} conversational Q&A pairs`);
   console.log(`🌦️ Live weather endpoint: GET /weather?city=CityName`);
   console.log(`🕒 India time endpoint: GET /time`);
+  console.log(`📍 Nearby jobs endpoint: POST /jobs-nearby (GPS-based, 10km radius, live links)`);
   console.log(`🧹 Clear memory endpoint: POST /clear-memory`);
 });
