@@ -4,7 +4,8 @@
   "description": "AI backend with Gemini, Tavily, DeepAI",
   "main": "server/server.js",
   "scripts": {
-    "start": "node server/server.js"
+    "start": "node server/server.js",
+    "dev": "nodemon server/server.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -15,5 +16,11 @@
     "express-session": "^1.18.0",
     "form-data": "^4.0.5",
     "multer": "^2.1.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
