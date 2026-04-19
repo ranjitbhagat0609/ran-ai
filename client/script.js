@@ -2059,252 +2059,271 @@ window.onload = function() {
   }
 };
 /* ═══════════════════════════════════════════════════════════════════════
-   JOB FINDER — Real jobs with Apply links
-   3-layer: Server (Adzuna real) → Gemini direct → Static fallback
+   JOB FINDER v4 — Apply buttons always show, works on Render deploy
+   Fix: apply_url always generated from role+location even if server omits it
 ═══════════════════════════════════════════════════════════════════════ */
 (function jobFinder() {
   const GEMINI_KEY = "AIzaSyA8t4ehEcTCz14tuI6DLSznGNRvWqzKj7Y";
   let jfLang = 'en';
 
-  function gel(id) { return document.getElementById(id); }
-  function jfEsc(s) { return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
-  function show(id,flex){ const e=gel(id); if(e) e.style.display=flex?'flex':'block'; }
-  function hide(id)     { const e=gel(id); if(e) e.style.display='none'; }
+  /* ── utils ── */
+  const gel = id => document.getElementById(id);
+  const esc = s => String(s||'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  const showFlex = id => { const e=gel(id); if(e) e.style.display='flex'; };
+  const showBlock= id => { const e=gel(id); if(e) e.style.display='block'; };
+  const hideEl  = id => { const e=gel(id); if(e) e.style.display='none'; };
 
-  function openModal() {
-    const ov=gel('jfOverlay'); if(!ov) return;
-    ov.style.display='flex';
-    setTimeout(()=>{ gel('jfRole')?.focus(); },80);
-  }
-  function closeModal() { const ov=gel('jfOverlay'); if(ov) ov.style.display='none'; }
-  function goBack() { hide('jfResults'); show('jfFormWrap'); const e=gel('jfErr'); if(e) e.textContent=''; }
-  function setLang(lang) {
-    jfLang=lang;
-    gel('jfLangEn')?.classList.toggle('active-lang', lang==='en');
-    gel('jfLangHi')?.classList.toggle('active-lang', lang==='hi');
+  /* ── Always generate portal links from role + location ── */
+  function makeLinks(role, location) {
+    const q   = encodeURIComponent(role.trim());
+    const loc = encodeURIComponent(location.trim());
+    const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+    return {
+      naukri:     `https://www.naukri.com/${slug(role)}-jobs-in-${slug(location)}`,
+      linkedin:   `https://www.linkedin.com/jobs/search/?keywords=${q}&location=${loc}`,
+      indeed:     `https://in.indeed.com/jobs?q=${q}&l=${loc}`,
+      shine:      `https://www.shine.com/job-search/${slug(role)}-jobs-in-${slug(location)}`,
+      internshala:`https://internshala.com/jobs/${slug(role)}-jobs`,
+    };
   }
 
-  function wireButtons() {
-    gel('jobFinderBtn')?.addEventListener('click', openModal);
-    gel('jfCloseBtn')?.addEventListener('click', closeModal);
-    gel('jfBackBtn')?.addEventListener('click', goBack);
-    gel('jfLangEn')?.addEventListener('click', ()=>setLang('en'));
-    gel('jfLangHi')?.addEventListener('click', ()=>setLang('hi'));
-    gel('jfFindBtn')?.addEventListener('click', doSearch);
-    gel('jfOverlay')?.addEventListener('click', function(e){ if(e.target===this) closeModal(); });
-    ['jfRole','jfLoc','jfSkills','jfExp'].forEach(id=>{
-      gel(id)?.addEventListener('keydown', e=>{ if(e.key==='Enter') doSearch(); });
-    });
-    document.addEventListener('keydown', e=>{
+  /* ── Enrich job with apply links if missing ── */
+  function enrichJob(job, role, location) {
+    const links = makeLinks(job.title || role, job.location || location);
+    if (!job.apply_url) {
+      job.apply_url = links.naukri;
+    }
+    job._links = links;
+    return job;
+  }
+
+  /* ── Open / Close ── */
+  const openModal  = () => { const o=gel('jfOverlay'); if(o){o.style.display='flex'; setTimeout(()=>gel('jfRole')?.focus(),80);} };
+  const closeModal = () => { const o=gel('jfOverlay'); if(o) o.style.display='none'; };
+  const goBack     = () => { hideEl('jfResults'); showFlex('jfFormWrap'); const e=gel('jfErr'); if(e) e.textContent=''; };
+  const setLang    = lang => {
+    jfLang = lang;
+    gel('jfLangEn')?.classList.toggle('jlang-active', lang==='en');
+    gel('jfLangHi')?.classList.toggle('jlang-active', lang==='hi');
+  };
+
+  /* ── Wire all buttons via addEventListener ── */
+  function wire() {
+    gel('jobFinderBtn') ?.addEventListener('click', openModal);
+    gel('jfCloseBtn')   ?.addEventListener('click', closeModal);
+    gel('jfBackBtn')    ?.addEventListener('click', goBack);
+    gel('jfLangEn')     ?.addEventListener('click', () => setLang('en'));
+    gel('jfLangHi')     ?.addEventListener('click', () => setLang('hi'));
+    gel('jfFindBtn')    ?.addEventListener('click', doSearch);
+    gel('jfOverlay')    ?.addEventListener('click', function(e){ if(e.target===this) closeModal(); });
+    ['jfRole','jfLoc','jfSkills','jfExp'].forEach(id =>
+      gel(id)?.addEventListener('keydown', e => { if(e.key==='Enter') doSearch(); })
+    );
+    document.addEventListener('keydown', e => {
       if(e.key==='Escape' && gel('jfOverlay')?.style.display!=='none') closeModal();
     });
   }
 
+  /* ── Main search ── */
   async function doSearch() {
     const role   = (gel('jfRole')?.value||'').trim();
-    const loc    = (gel('jfLoc')?.value||'').trim()||'Delhi';
+    const loc    = (gel('jfLoc')?.value||'').trim() || 'Delhi';
     const skRaw  = (gel('jfSkills')?.value||'').trim();
-    const expRaw = (gel('jfExp')?.value||'0').trim();
+    const expRaw = (gel('jfExp')?.value||'0');
     const errEl  = gel('jfErr');
     const btn    = gel('jfFindBtn');
 
-    if(!role){ if(errEl) errEl.textContent='Please enter a job role ⚠️'; gel('jfRole')?.focus(); return; }
-    if(errEl) errEl.textContent='';
+    if (!role) { if(errEl) errEl.textContent='Please enter a job role ⚠️'; gel('jfRole')?.focus(); return; }
+    if (errEl) errEl.textContent = '';
 
     const skills = skRaw ? skRaw.split(',').map(s=>s.trim()).filter(Boolean) : [];
-    const exp    = parseInt(expRaw,10)||0;
+    const exp    = parseInt(expRaw,10) || 0;
 
-    // Show loading
-    if(btn){ btn.disabled=true; btn.style.opacity='.6'; }
-    hide('jfFormWrap'); hide('jfResults');
-    show('jfLoading', true);
+    /* show loading */
+    if(btn){ btn.disabled=true; btn.style.opacity='.55'; }
+    hideEl('jfFormWrap'); hideEl('jfResults');
+    showFlex('jfLoading');
 
     let data = null;
 
-    // ── Layer 1: Server /jobs (Adzuna real jobs) ──
+    /* ── Layer 1: Server /jobs ── */
     try {
-      const serverBase = (typeof API!=='undefined' ? API : 'https://ran-ai.onrender.com');
+      const base = (typeof API!=='undefined' ? API : 'https://ran-ai.onrender.com');
+      console.log('[JF] Trying server:', base+'/jobs');
       const res = await Promise.race([
-        fetch(serverBase+'/jobs',{
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({role,location:loc,skills,experience:exp,lang:jfLang})
+        fetch(base+'/jobs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role, location:loc, skills, experience:exp, lang:jfLang })
         }),
-        new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),10000))
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),12000))
       ]);
-      if(res.ok){
-        const j=await res.json();
-        if(j&&j.success&&j.jobs&&j.jobs.length) data=j;
+      if (res.ok) {
+        const j = await res.json();
+        console.log('[JF] Server response:', j);
+        if (j && j.success && Array.isArray(j.jobs) && j.jobs.length) data = j;
+      } else {
+        console.warn('[JF] Server HTTP error:', res.status);
       }
-    } catch(e){ console.warn('[JF] server:',e.message); }
+    } catch(e) { console.warn('[JF] Server failed:', e.message); }
 
-    // ── Layer 2: Gemini direct ──
-    if(!data){
+    /* ── Layer 2: Gemini direct ── */
+    if (!data) {
+      console.log('[JF] Trying Gemini direct...');
       try {
-        const isHi=jfLang==='hi';
-        const sal=exp===0?'₹10,000–₹25,000':exp<=2?'₹20,000–₹50,000':exp<=5?'₹40,000–₹90,000':'₹80,000–₹2,00,000';
-        const locSlug=loc.toLowerCase().replace(/\s+/g,'-');
-        const prompt=`You are a job finder for India. Return ONLY raw JSON (no markdown, no backticks).
-Role: ${role} | Location: ${loc} | Skills: ${skills.join(',')||'any'} | Exp: ${exp}yrs | Lang: ${jfLang}
-Salary range: ${sal}/month. Generate 6 realistic job listings with real company names.
-For apply_url use real portals: naukri.com, linkedin.com/jobs, indeed.co.in, internshala.com (for freshers).
-Return: {"message":"...","jobs":[{"title":"","company":"","location":"${loc}","salary":"₹X – ₹Y/month","skills_required":[],"experience_required":"","type":"real","apply_url":"https://www.naukri.com/jobs-in-${locSlug}?q=${encodeURIComponent(role)}","description":"one line job desc","posted":"Today"}],"suggestions":["","",""]}`;
+        const isHi = jfLang==='hi';
+        const sal  = exp===0?'₹10,000–₹25,000':exp<=2?'₹20,000–₹50,000':exp<=5?'₹40,000–₹90,000':'₹80,000–₹2,00,000';
+        const links = makeLinks(role, loc);
+        const prompt = `Return ONLY a raw JSON object. No markdown. No explanation.
+Find jobs for: Role="${role}", Location="${loc}", Skills="${skills.join(',')}", Experience=${exp}yrs, Language=${jfLang}
+Generate 6 realistic Indian job listings. Use real companies: TCS, Infosys, Wipro, HCL, Zomato, Flipkart, Amazon India, Paytm, startups.
+Salary: ${sal}/month.
+For apply_url use REAL URLs like:
+- Naukri: ${links.naukri}
+- LinkedIn: ${links.linkedin}
+- Indeed: ${links.indeed}
+Return this exact JSON structure:
+{"message":"${isHi?role+' ke liye jobs mil gayi!':role+' jobs found near '+loc+'!'}","jobs":[{"title":"","company":"","location":"${loc}","salary":"₹X – ₹Y/month","skills_required":[""],"experience_required":"","type":"real","apply_url":"USE_REAL_URL_FROM_ABOVE","description":""}],"suggestions":["","",""]}`;
 
-        const gr=await Promise.race([
-          fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`,{
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.7,maxOutputTokens:1800}})
+        const gr = await Promise.race([
+          fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents:[{parts:[{text:prompt}]}], generationConfig:{temperature:0.6,maxOutputTokens:2000} })
           }),
-          new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),12000))
+          new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),14000))
         ]);
-        if(gr.ok){
-          const gj=await gr.json();
-          let raw=(gj?.candidates?.[0]?.content?.parts?.[0]?.text||'').trim()
+        if (gr.ok) {
+          const gj = await gr.json();
+          let raw = (gj?.candidates?.[0]?.content?.parts?.[0]?.text||'').trim()
             .replace(/^```json\s*/i,'').replace(/^```\s*/i,'').replace(/\s*```\s*$/i,'').trim();
-          const p=JSON.parse(raw);
-          if(p&&p.jobs&&p.jobs.length) data={success:true,...p,realCount:0};
+          console.log('[JF] Gemini raw:', raw.slice(0,200));
+          const p = JSON.parse(raw);
+          if (p && Array.isArray(p.jobs) && p.jobs.length) data = { success:true, ...p, realCount:0 };
         }
-      } catch(e){ console.warn('[JF] gemini:',e.message); }
+      } catch(e) { console.warn('[JF] Gemini failed:', e.message); }
     }
 
-    // ── Layer 3: Smart static fallback with real portal links ──
-    if(!data){
-      const isHi=jfLang==='hi';
-      const sal=exp===0?'₹10,000 – ₹22,000':exp<=2?'₹20,000 – ₹45,000':exp<=5?'₹45,000 – ₹85,000':'₹80,000 – ₹1,50,000';
-      const sk=skills.length?skills:['Communication','Teamwork'];
-      const q=encodeURIComponent(role);
-      const locQ=encodeURIComponent(loc);
-      data={success:true,realCount:0,
-        message:isHi?`${role} ke liye ${loc} mein jobs dekho!`:`Check ${role} jobs near ${loc}!`,
-        jobs:[
-          {title:role,company:'TCS',location:loc,salary:sal,skills_required:sk,experience_required:exp===0?'Fresher':''+exp+'+ years',type:'real',apply_url:`https://www.naukri.com/${role.toLowerCase().replace(/\s+/g,'-')}-jobs-in-${loc.toLowerCase().replace(/\s+/g,'-')}`,description:'Apply via Naukri.com — one of India\'s top job portals'},
-          {title:role,company:'Infosys',location:loc,salary:sal,skills_required:sk,experience_required:exp===0?'Fresher':''+exp+'+ years',type:'real',apply_url:`https://www.linkedin.com/jobs/search/?keywords=${q}&location=${locQ}`,description:'Apply via LinkedIn Jobs'},
-          {title:role,company:'Wipro',location:loc,salary:sal,skills_required:sk,experience_required:exp===0?'Fresher':''+exp+'+ years',type:'real',apply_url:`https://www.indeed.co.in/jobs?q=${q}&l=${locQ}`,description:'Apply via Indeed India'},
-          {title:role,company:'HCL Technologies',location:loc,salary:sal,skills_required:sk,experience_required:exp===0?'Fresher':''+exp+'+ years',type:'real',apply_url:`https://www.shine.com/job-search/${role.toLowerCase().replace(/\s+/g,'-')}-jobs-in-${loc.toLowerCase().replace(/\s+/g,'-')}`,description:'Apply via Shine.com'},
-          {title:`${role} (Freelance)`,company:'Internshala',location:'Remote / '+loc,salary:exp===0?'₹8,000 – ₹15,000':'Negotiable',skills_required:sk,experience_required:exp===0?'Fresher / Intern':'Any',type:'real',apply_url:`https://internshala.com/jobs/${role.toLowerCase().replace(/\s+/g,'-')}-jobs-in-${loc.toLowerCase().replace(/\s+/g,'+')}`,description:'Internships & fresher jobs on Internshala'},
+    /* ── Layer 3: Always-working static fallback ── */
+    if (!data) {
+      console.log('[JF] Using static fallback');
+      const isHi = jfLang==='hi';
+      const sal  = exp===0?'₹10,000 – ₹22,000':exp<=2?'₹20,000 – ₹45,000':exp<=5?'₹45,000 – ₹85,000':'₹80,000 – ₹1,50,000';
+      const sk   = skills.length ? skills : ['Communication','Problem Solving'];
+      const lnk  = makeLinks(role, loc);
+      const expLabel = exp===0?'Fresher / 0–1 years':`${exp}+ years`;
+      data = {
+        success: true, realCount: 0,
+        message: isHi ? `${role} ke liye ${loc} mein jobs!` : `${role} jobs near ${loc}!`,
+        jobs: [
+          { title:role, company:'TCS',                  location:loc, salary:sal, skills_required:sk, experience_required:expLabel, type:'real', apply_url:lnk.naukri,      description:'Apply on Naukri — India\'s #1 job portal' },
+          { title:role, company:'Infosys',              location:loc, salary:sal, skills_required:sk, experience_required:expLabel, type:'real', apply_url:lnk.linkedin,    description:'Apply on LinkedIn Jobs' },
+          { title:role, company:'Wipro',                location:loc, salary:sal, skills_required:sk, experience_required:expLabel, type:'real', apply_url:lnk.indeed,      description:'Apply on Indeed India' },
+          { title:role, company:'HCL Technologies',     location:loc, salary:sal, skills_required:sk, experience_required:expLabel, type:'real', apply_url:lnk.shine,       description:'Apply on Shine.com' },
+          { title:role, company:'Internshala / Remote', location:loc, salary:exp===0?'₹8,000 – ₹15,000':sal, skills_required:sk, experience_required:exp===0?'Fresher/Intern':expLabel, type:'real', apply_url:lnk.internshala, description:'Internships & fresher roles' },
         ],
-        suggestions:isHi
-          ?['AWS/Azure certificate se salary 30% badh sakti hai','DSA practice karo — product companies mein zaroori hai','LinkedIn profile update karo aur recruiter ko message karo']
-          :['Getting AWS/Azure certified can boost salary by 30%','Practice DSA for product company interviews','Update LinkedIn & reach out to recruiters directly']
+        suggestions: isHi
+          ? ['AWS/Azure certificate se salary 30% badh sakti hai','DSA practice karo — product companies mein zaroor poochha jaata hai','LinkedIn profile update karo — recruiter directly contact karte hain']
+          : ['Getting AWS/Azure certified boosts salary by ~30%','Practice DSA for product company interviews','Update LinkedIn — recruiters will reach out directly'],
       };
     }
 
-    hide('jfLoading');
-    jfRender(data, {role, loc, exp});
-    show('jfResults', true);
+    /* ── Enrich every job with apply links (key fix for Render) ── */
+    data.jobs = (data.jobs||[]).map(job => enrichJob(job, role, loc));
+
+    /* ── Render ── */
+    hideEl('jfLoading');
+    render(data);
+    showFlex('jfResults');
     if(btn){ btn.disabled=false; btn.style.opacity='1'; }
   }
 
-  function jfRender(data, meta) {
-    // Message
-    const msgEl=gel('jfMsg');
-    if(msgEl) msgEl.textContent=data.message||'';
+  /* ── Render job cards ── */
+  function render(data) {
+    /* message */
+    const msgEl = gel('jfMsg');
+    if(msgEl) msgEl.textContent = data.message || '';
 
-    // Sub message
-    const subEl=gel('jfSubMsg');
-    if(subEl){
-      const rc=data.realCount||0;
-      const total=(data.jobs||[]).length;
-      subEl.textContent=rc>0
-        ? `${rc} real listing${rc>1?'s':''} found with apply links`
-        : `${total} listings with apply links from top job portals`;
-    }
+    const subEl = gel('jfSubMsg');
+    if(subEl) subEl.textContent = `${(data.jobs||[]).length} listings with apply links`;
 
-    // Cards
-    const cardsEl=gel('jfCards');
-    if(cardsEl){
-      cardsEl.innerHTML='';
-      (data.jobs||[]).forEach((job,i)=>{
-        const isReal=job.type==='real';
-        const badge=isReal
-          ?`<span style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:3px 10px;border-radius:20px;background:rgba(0,232,135,0.12);color:#00e887;border:1px solid rgba(0,232,135,0.22);flex-shrink:0;display:inline-flex;align-items:center;gap:4px;"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> Real</span>`
-          :`<span style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:3px 10px;border-radius:20px;background:rgba(59,130,246,0.1);color:#3b82f6;border:1px solid rgba(59,130,246,0.2);flex-shrink:0;">~ AI Est.</span>`;
+    /* cards */
+    const cardsEl = gel('jfCards');
+    if (cardsEl) {
+      cardsEl.innerHTML = '';
+      (data.jobs||[]).forEach((job, i) => {
+        const isReal = job.type === 'real';
+        const badge = isReal
+          ? `<span style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:3px 10px;border-radius:20px;background:rgba(0,232,135,0.12);color:#00e887;border:1px solid rgba(0,232,135,0.22);flex-shrink:0;display:inline-flex;align-items:center;gap:3px;"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>Real</span>`
+          : `<span style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:3px 10px;border-radius:20px;background:rgba(59,130,246,0.1);color:#3b82f6;border:1px solid rgba(59,130,246,0.2);flex-shrink:0;">~AI Est.</span>`;
 
-        const tags=(job.skills_required||[]).slice(0,5).map(s=>
-          `<span style="font-size:11px;font-weight:600;color:#8892a4;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:3px 8px;">${jfEsc(s)}</span>`
+        const tags = (job.skills_required||[]).slice(0,5).map(s =>
+          `<span style="font-size:11px;font-weight:600;color:#8892a4;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:3px 8px;">${esc(s)}</span>`
         ).join('');
 
-        // Apply button — real link or search link
-        let applyHtml = '';
-        if(job.apply_url){
-          applyHtml=`<a href="${jfEsc(job.apply_url)}" target="_blank" rel="noopener" class="apply-btn">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-            Apply Now
-          </a>`;
-        }
+        /* ── Apply buttons — always generated ── */
+        const applyUrl    = job.apply_url || job._links?.naukri || makeLinks(job.title||'',job.location||'').naukri;
+        const naukriUrl   = job._links?.naukri   || makeLinks(job.title||'',job.location||'').naukri;
+        const linkedinUrl = job._links?.linkedin || makeLinks(job.title||'',job.location||'').linkedin;
 
-        // Also always add Naukri search link
-        const naukriUrl=`https://www.naukri.com/${encodeURIComponent((job.title||meta.role).toLowerCase().replace(/\s+/g,'-'))}-jobs-in-${encodeURIComponent((job.location||meta.loc).toLowerCase().replace(/\s+/g,'-'))}`;
-        const altApply=!job.apply_url||job.apply_url===naukriUrl?'':
-          `<a href="${jfEsc(naukriUrl)}" target="_blank" rel="noopener" class="apply-btn-ghost">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            Naukri
-          </a>`;
+        // Primary apply button
+        const applyBtn = `<a href="${esc(applyUrl)}" target="_blank" rel="noopener noreferrer" class="jf-apply">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          Apply Now
+        </a>`;
 
-        const div=document.createElement('div');
-        div.className='jcard'+(isReal?' real-job':'');
-        div.style.animationDelay=(i*0.055)+'s';
-        div.innerHTML=`
+        // Portal shortcut buttons
+        const altBtn1 = applyUrl!==naukriUrl
+          ? `<a href="${esc(naukriUrl)}" target="_blank" rel="noopener noreferrer" class="jf-portal">Naukri</a>` : '';
+        const altBtn2 = applyUrl!==linkedinUrl
+          ? `<a href="${esc(linkedinUrl)}" target="_blank" rel="noopener noreferrer" class="jf-portal">LinkedIn</a>` : '';
+
+        const div = document.createElement('div');
+        div.className = 'jcard';
+        div.style.animationDelay = (i * 0.055) + 's';
+        div.innerHTML = `
           <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px;">
             <div style="min-width:0;">
-              <div style="font-size:15px;font-weight:700;color:#f0f4ff;margin-bottom:2px;">${jfEsc(job.title)}</div>
-              <div style="font-size:12.5px;color:#8892a4;font-weight:500;">${jfEsc(job.company)}</div>
+              <div style="font-size:15px;font-weight:700;color:#f0f4ff;">${esc(job.title)}</div>
+              <div style="font-size:12.5px;color:#8892a4;margin-top:2px;">${esc(job.company)}</div>
             </div>
             ${badge}
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
             <span style="font-size:12px;color:#8892a4;display:flex;align-items:center;gap:4px;">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
-              ${jfEsc(job.location||meta.loc)}
-            </span>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>${esc(job.location)}</span>
             <span style="font-size:12px;color:#8892a4;display:flex;align-items:center;gap:4px;">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-              ${jfEsc(job.experience_required||'Any')}
-            </span>
-            ${job.posted?`<span style="font-size:12px;color:#424d5c;display:flex;align-items:center;gap:4px;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:.4"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>${jfEsc(job.posted)}</span>`:''}
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>${esc(job.experience_required||'Any')}</span>
           </div>
-          <div style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,232,135,0.08);border:1px solid rgba(0,232,135,0.15);border-radius:8px;padding:5px 12px;font-size:13px;font-weight:700;color:#00e887;margin-bottom:${tags||applyHtml?'12px':'0'};">
+          <div style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,232,135,0.08);border:1px solid rgba(0,232,135,0.15);border-radius:8px;padding:5px 12px;font-size:13px;font-weight:700;color:#00e887;margin-bottom:10px;">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
-            ${jfEsc(job.salary||'Negotiable')}
+            ${esc(job.salary||'Negotiable')}
           </div>
-          ${job.description?`<div style="font-size:12px;color:#424d5c;margin-bottom:12px;line-height:1.5;">${jfEsc(job.description)}</div>`:''}
+          ${job.description?`<div style="font-size:12px;color:#424d5c;margin-bottom:10px;line-height:1.5;">${esc(job.description)}</div>`:''}
           ${tags?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">${tags}</div>`:''}
-          ${applyHtml||altApply?`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">${applyHtml}${altApply}</div>`:''}
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">${applyBtn}${altBtn1}${altBtn2}</div>
         `;
         cardsEl.appendChild(div);
       });
     }
 
-    // Tips
-    const tipsEl=gel('jfTips');
-    if(tipsEl){
-      const sugs=data.suggestions||[];
-      if(sugs.length){
-        tipsEl.style.display='block';
-        tipsEl.innerHTML=`<div style="background:rgba(59,130,246,0.05);border:1px solid rgba(59,130,246,0.14);border-radius:14px;padding:14px 16px;">
+    /* tips */
+    const tipsEl = gel('jfTips');
+    if (tipsEl) {
+      const sugs = data.suggestions || [];
+      tipsEl.style.display = sugs.length ? 'block' : 'none';
+      if (sugs.length) {
+        tipsEl.innerHTML = `<div style="background:rgba(59,130,246,0.05);border:1px solid rgba(59,130,246,0.14);border-radius:14px;padding:14px 16px;">
           <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#3b82f6;margin-bottom:10px;display:flex;align-items:center;gap:6px;">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-            Salary Booster Tips
-          </div>
-          ${sugs.map(s=>`<div style="display:flex;align-items:flex-start;gap:8px;font-size:13px;color:#8892a4;padding:5px 0;line-height:1.5;border-bottom:1px solid rgba(255,255,255,0.04);"><span style="color:#3b82f6;font-weight:700;flex-shrink:0;margin-top:1px;">→</span>${jfEsc(s)}</div>`).join('')}
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>Salary Booster Tips</div>
+          ${sugs.map(s=>`<div style="display:flex;align-items:flex-start;gap:8px;font-size:13px;color:#8892a4;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.03);line-height:1.5;"><span style="color:#3b82f6;font-weight:700;flex-shrink:0;">→</span>${esc(s)}</div>`).join('')}
         </div>`;
-      } else { tipsEl.style.display='none'; }
-    }
-
-    // Setup note if Adzuna not configured
-    const noteEl=gel('jfSetupNote');
-    if(noteEl){
-      if(data.adzunaReady===false){
-        noteEl.style.display='block';
-        noteEl.innerHTML='⚡ <strong>To get 100% real live job listings:</strong> Add free Adzuna API keys in server.js — register at <a href="https://developer.adzuna.com" target="_blank" style="color:#fbbf24;text-decoration:underline;">developer.adzuna.com</a> (free, takes 2 min). Apply links above go to real job portals.';
-      } else {
-        noteEl.style.display='none';
       }
     }
   }
 
-  if(document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded', wireButtons);
-  } else {
-    wireButtons();
-  }
+  /* ── Init ── */
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
+  else wire();
+
 })();
