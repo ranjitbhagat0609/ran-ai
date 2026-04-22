@@ -137,6 +137,54 @@ function renderMarkdown(text) {
     .replace(/\n/g, '<br>');
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   TYPING ANIMATION – ChatGPT-style word-by-word reveal
+═══════════════════════════════════════════════════════════════════════ */
+function typeAIMessage(bubble, text, onDone) {
+  // Split into tokens: preserve spaces so we can animate word by word
+  const tokens = text.split(/(\s+)/);
+  let i = 0;
+  let rendered = '';
+
+  // Cursor blink element
+  const cursor = document.createElement('span');
+  cursor.className = 'ranai-typing-cursor';
+  cursor.innerHTML = '▋';
+  cursor.style.cssText = 'display:inline-block;margin-left:1px;animation:ranai-cursor-blink 0.7s step-start infinite;opacity:1;color:var(--accent,#10a37f);font-size:0.9em;';
+
+  bubble.innerHTML = '';
+  bubble.appendChild(cursor);
+
+  // Inject cursor blink keyframes once
+  if (!document.getElementById('ranai-cursor-style')) {
+    const style = document.createElement('style');
+    style.id = 'ranai-cursor-style';
+    style.textContent = `@keyframes ranai-cursor-blink{0%,100%{opacity:1}50%{opacity:0}}`;
+    document.head.appendChild(style);
+  }
+
+  // Speed: ~18ms per token gives smooth ChatGPT-like feel
+  const DELAY = 18;
+
+  function step() {
+    if (i >= tokens.length) {
+      // Done — remove cursor, render final HTML properly
+      bubble.innerHTML = renderMarkdown(text);
+      scrollToBottom();
+      if (typeof onDone === 'function') onDone();
+      return;
+    }
+    rendered += tokens[i];
+    i++;
+    // Re-render with cursor appended
+    bubble.innerHTML = renderMarkdown(rendered);
+    bubble.appendChild(cursor);
+    scrollToBottom();
+    setTimeout(step, DELAY);
+  }
+  step();
+}
+
 function scrollToBottom() {
   const area = document.querySelector('.chat-scroll-area');
   if (area) area.scrollTo({ top: area.scrollHeight, behavior: 'smooth' });
@@ -1374,7 +1422,10 @@ function addMessage(role, text, saveToConversation) {
   avatar.src = avatarUrl;
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble';
-  bubble.innerHTML = renderMarkdown(text);
+  // AI messages get ChatGPT-style word-by-word typing; user messages render instantly
+  if (role !== 'ai') {
+    bubble.innerHTML = renderMarkdown(text);
+  }
 
   if (role === 'user') {
     const editIcon = document.createElement('span');
@@ -1401,10 +1452,21 @@ function addMessage(role, text, saveToConversation) {
   container.appendChild(row);
   scrollToBottom();
 
-  if (role === 'ai' && shouldSpeakNextReply) {
+  // Start typing animation for AI messages
+  if (role === 'ai') {
+    typeAIMessage(bubble, text, () => {
+      // After typing finishes, speak if needed
+      if (shouldSpeakNextReply) {
+        speakReply(text);
+        shouldSpeakNextReply = false;
+      }
+    });
+  } else if (role === 'ai' && shouldSpeakNextReply) {
     speakReply(text);
     shouldSpeakNextReply = false;
   }
+
+  if (role === 'user' && shouldSpeakNextReply) { /* voice flag only for AI */ }
 
   if (saveToConversation && currentConversationId) {
     const conv = conversations.find(c => c.id === currentConversationId);
