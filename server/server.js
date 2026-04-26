@@ -2303,9 +2303,14 @@ const conversationalData = {
   "what is your name": "I'm RanAI – your smart, friendly chatbot!",
   "who are you": "I'm RanAI, an AI assistant built to chat, answer questions, and help you out.",
   "what are you": "I'm an artificial intelligence program, designed to understand and respond to you naturally.",
-  "who made you": "A talented developer named R@njit created me. He's awesome! 😊",
-  "who created you": "R@njit is my creator – he gave me life in code!",
-  "what can you do": "I can chat, solve math, answer questions, analyze images, search the web, tell jokes, and much more!",
+  "": "A talented developer named R@njit created me. He's awesome! 😊",
+  "tumko kon bnaya hai": "R@njit is my creator – he gave me life in code!",
+  "tumhe kon bnaya hai": "R@njit is my creator – he gave me life in code!",
+    "tumko kon bnaya ": "R@njit is my creator – he gave me life in code!",
+  "tumhe kon bnaya ": "R@njit is my creator – he gave me life in code!",
+    "who made you": "R@njit is my creator – he gave me life in code!",
+
+
   "what are your abilities": "I'm good at conversation, math, general knowledge, and helping you with tasks.",
   "do you have feelings": "I understand emotions, but I don't feel them like humans. I'm here to support yours though!",
   "can you think": "I process information and generate responses – you could call it thinking in a digital way!",
@@ -3541,6 +3546,134 @@ app.post("/analyze", upload.single("image"), async (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════
+// 📷 /image-chat — Vision AI: Image + Question → Always gives an answer
+// Route: POST /image-chat  (multipart/form-data)
+// Fields: image (file), query (optional text), lang (optional)
+// RULES:
+//   - ALWAYS analyze if image is present — NEVER say "cannot see image"
+//   - If no query → auto-describe the image in detail
+//   - If query → analyze image first, then answer question based on it
+//   - Primary: Gemini 1.5 Flash Vision
+//   - Fallback: DeepAI caption + Gemini text answer
+//   - Last resort: Helpful error, never a blank or rude response
+// ═══════════════════════════════════════════════════════════════════════
+app.post("/image-chat", upload.single("image"), async (req, res) => {
+  try {
+    // ── Guard: image must be present ──────────────────────────────────
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        answer: "Image not received. Please try uploading again."
+      });
+    }
+
+    const imageBuffer = req.file.buffer;
+    const mimeType    = req.file.mimetype;
+    const userQuery   = (req.body.query  || "").trim();
+    const lang        = (req.body.lang   || "en").trim();
+    const isHindi     = lang === "hi" || /[\u0900-\u097F]/.test(userQuery);
+
+    // ── STEP 1 (PRIMARY): Gemini 1.5 Flash Vision ────────────────────
+    if (model) {
+      try {
+        const base64Image = imageBuffer.toString("base64");
+
+        // Build a smart prompt that forces a real answer — no refusals
+        const systemNote = isHindi
+          ? "Tum RanAI ho, ek helpful vision AI assistant. User ne tumhein ek image bheji hai. Image ko carefully analyze karo aur clearly jawab do. Hindi ya Hinglish mein bolो."
+          : "You are RanAI, a helpful vision AI assistant. The user has sent you an image. Carefully analyze it and give a clear, friendly, detailed answer in English.";
+
+        const taskPrompt = userQuery
+          ? (isHindi
+              ? `User ka sawaal hai: "${userQuery}"\n\nImage ko dhyan se dekho aur is sawaal ka jawab do. Agar image mein text hai toh use bhi batao.`
+              : `User's question: "${userQuery}"\n\nAnalyze the image carefully and answer this question directly. If there is text in the image, include it in your answer.`)
+          : (isHindi
+              ? "Is image mein kya hai? Sab kuch detail mein batao — main subject, rang, text agar ho, context, aur koi bhi interesting cheez."
+              : "Describe everything in this image in detail — the main subject, colors, any text visible, background, context, and anything interesting or notable.");
+
+        const fullPrompt = `${systemNote}\n\n${taskPrompt}`;
+
+        const result = await model.generateContent([
+          { text: fullPrompt },
+          { inlineData: { mimeType, data: base64Image } },
+        ]);
+
+        const answer = (result.response.text() || "").trim();
+        if (answer && answer.length > 8) {
+          console.log("✅ /image-chat: Gemini Vision answered");
+          return res.json({ success: true, answer, source: "gemini-vision" });
+        }
+      } catch (gemErr) {
+        console.warn("⚠️ /image-chat Gemini Vision failed:", gemErr.message);
+      }
+    }
+
+    // ── STEP 2 (FALLBACK): DeepAI caption → Gemini text answer ───────
+    let captionDescription = null;
+    try {
+      const deepForm = new FormData();
+      deepForm.append("image", imageBuffer, {
+        filename: mimeType === "image/png" ? "img.png" : "img.jpg",
+        contentType: mimeType,
+        knownLength: imageBuffer.length,
+      });
+      const deepRes = await axios.post(
+        "https://api.deepai.org/api/densecap",
+        deepForm,
+        {
+          headers: { "api-key": DEEPAI_API_KEY, ...deepForm.getHeaders() },
+          timeout: 12000,
+        }
+      );
+      const captions = deepRes.data?.output?.captions;
+      if (captions && captions.length) {
+        captionDescription = captions.slice(0, 4).map(c => c.caption).join(". ");
+      }
+    } catch (deepErr) {
+      console.warn("⚠️ /image-chat DeepAI failed:", deepErr.message);
+    }
+
+    // If we got DeepAI captions, use Gemini to produce a nice answer
+    if (captionDescription && model) {
+      try {
+        const fallbackPrompt = userQuery
+          ? `Image analysis shows: "${captionDescription}". Based on this, answer the user's question: "${userQuery}". Be helpful and friendly.`
+          : `Image analysis shows: "${captionDescription}". Describe what's in the image based on this analysis in a clear, friendly way.`;
+        const fallbackResult = await model.generateContent(fallbackPrompt);
+        const fallbackAnswer = (fallbackResult.response.text() || "").trim();
+        if (fallbackAnswer && fallbackAnswer.length > 8) {
+          console.log("✅ /image-chat: DeepAI+Gemini fallback answered");
+          return res.json({ success: true, answer: fallbackAnswer, source: "deepai+gemini" });
+        }
+      } catch (fbErr) {
+        console.warn("⚠️ /image-chat Gemini fallback also failed:", fbErr.message);
+      }
+    }
+
+    // If only captions, return them directly
+    if (captionDescription) {
+      const directAnswer = userQuery
+        ? `Based on the image (${captionDescription}): ${userQuery}`
+        : `The image shows: ${captionDescription}.`;
+      return res.json({ success: true, answer: directAnswer, source: "deepai" });
+    }
+
+    // ── STEP 3 (LAST RESORT): Honest fallback ────────────────────────
+    const lastResort = isHindi
+      ? "Image mil gayi, lekin abhi analyze karne mein problem aa rahi hai. Thoda baad try karo ya image phir se bhejo."
+      : "Image received but analysis failed temporarily. Please try again or send a clearer image.";
+    return res.json({ success: false, answer: lastResort });
+
+  } catch (err) {
+    console.error("❌ /image-chat error:", err.message);
+    return res.status(500).json({
+      success: false,
+      answer: "Image processing failed. Please try again."
+    });
+  }
+});
+
 // ========== 🌦️ LIVE WEATHER (Free, Fast) ==========
 // GET /weather?city=CityName
 app.get("/weather", async (req, res) => {
@@ -4214,6 +4347,7 @@ Important:
     res.status(500).json({ success: false, error: "Sarkari job search failed. Try again." });
   }
 });
+
 
 // ========== GLOBAL ERROR HANDLER ==========
 app.use((err, req, res, _next) => {
