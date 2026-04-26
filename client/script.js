@@ -1346,51 +1346,93 @@ async function handleImageGeneration(prompt) {
 const bubble_ref_hack = null;
 
 /* ═══════════════════════════════════════════════════════════════════════
-   ENHANCED IMAGE ANALYSIS with OCR + optional backend
+   IMAGE → AI PIPELINE
+   PRIMARY  : POST /image-chat  (Gemini Vision — always answers)
+   FALLBACK1: OCR (Tesseract) + /ask  (for text-heavy images)
+   FALLBACK2: POST /analyze    (DeepAI + Tavily)
+   RULES:
+   - NEVER say "I cannot see the image"
+   - If no question → auto-describe image
+   - Voice output only fires if caller sets shouldSpeakNextReply = true
 ═══════════════════════════════════════════════════════════════════════ */
 async function sendImageToAI(imageFile, textQuery) {
   showTyping();
-  try {
-    let extractedText = '';
-    try {
-      extractedText = await extractTextFromImage(imageFile);
-      if (extractedText) {
-        addMessage('ai', `📄 **Text extracted from image:**\n\n${extractedText}`, true);
-      }
-    } catch (ocrErr) {
-      console.warn('OCR failed', ocrErr);
-      addMessage('ai', '⚠️ Could not extract text from image. Trying backend analysis...', true);
-    }
 
-    if (textQuery && textQuery.trim()) {
-      const combinedQuestion = extractedText
-        ? `User asked: "${textQuery}". Text extracted from image: "${extractedText}". Answer based on both.`
-        : textQuery;
-      await sendMessageToAI(combinedQuestion);
-    } else if (extractedText) {
-      addMessage('ai', 'Do you want me to explain or do something with this text? Just ask!', true);
-    } else {
-      const formData = new FormData();
-      formData.append('image', imageFile);
-      if (textQuery && textQuery.trim()) formData.append('query', textQuery);
-      const res = await fetch(`${API}/analyze`, { method: 'POST', body: formData });
+  const lang = detectLanguage(textQuery || '');
+
+  // ── PRIMARY: /image-chat  (Gemini Vision) ────────────────────────
+  try {
+    const formData = new FormData();
+    formData.append('image', imageFile);
+    if (textQuery && textQuery.trim()) formData.append('query', textQuery.trim());
+    formData.append('lang', lang);
+
+    const res = await fetch(`${API}/image-chat`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (res.ok) {
       const data = await res.json();
-      hideTyping();
-      if (data.success) {
+      if (data.answer && data.answer.trim().length > 4) {
+        hideTyping();
         let answer = data.answer;
-        if (detectLanguage(textQuery||'') === 'hi' && !/[\u0900-\u097F]/.test(answer))
+        // Translate to Hindi if user spoke Hindi and response came back English
+        if (lang === 'hi' && !/[\u0900-\u097F]/.test(answer)) {
           answer = await translateText(answer, 'hi');
-        addMessage('ai', `🔍 Detected: ${data.detected}\n\n📝 ${answer}`);
-      } else {
-        addMessage('ai', `⚠️ ${data.error || 'Could not analyze the image.'}`);
+        }
+        addMessage('ai', answer);
+        saveMessage('ai', answer);
+        return;
       }
+    }
+  } catch (primaryErr) {
+    console.warn('[sendImageToAI] /image-chat failed:', primaryErr.message);
+  }
+
+  // ── FALLBACK 1: OCR → /ask  (works well for text-heavy images) ──
+  try {
+    const extractedText = await extractTextFromImage(imageFile);
+    if (extractedText && extractedText.trim().length > 10) {
+      const combinedQ = textQuery && textQuery.trim()
+        ? `User asked: "${textQuery}". Text found in image: "${extractedText}". Answer based on both.`
+        : `Please explain or summarize this text extracted from an image: "${extractedText}"`;
+      await sendMessageToAI(combinedQ);
+      hideTyping();
       return;
     }
-    hideTyping();
-  } catch (e) {
-    hideTyping();
-    addMessage('ai', '🌐 Could not process image. Make sure Tesseract loaded or try again.');
+  } catch (ocrErr) {
+    console.warn('[sendImageToAI] OCR failed:', ocrErr.message);
   }
+
+  // ── FALLBACK 2: /analyze  (DeepAI + Tavily pipeline) ────────────
+  try {
+    const fd2 = new FormData();
+    fd2.append('image', imageFile);
+    if (textQuery && textQuery.trim()) fd2.append('query', textQuery.trim());
+    const res2 = await fetch(`${API}/analyze`, { method: 'POST', body: fd2 });
+    if (res2.ok) {
+      const data2 = await res2.json();
+      if (data2.success && data2.answer) {
+        hideTyping();
+        let answer = data2.answer;
+        if (lang === 'hi' && !/[\u0900-\u097F]/.test(answer))
+          answer = await translateText(answer, 'hi');
+        addMessage('ai', `🔍 ${data2.detected ? data2.detected + '\n\n' : ''}${answer}`);
+        saveMessage('ai', answer);
+        return;
+      }
+    }
+  } catch (analyzeErr) {
+    console.warn('[sendImageToAI] /analyze failed:', analyzeErr.message);
+  }
+
+  // ── LAST RESORT: Honest, friendly error ──────────────────────────
+  hideTyping();
+  const errorMsg = lang === 'hi'
+    ? '⚠️ Image analyze nahi ho payi abhi. Thoda baad try karo ya image phir se bhejo.'
+    : '⚠️ Image processing failed. Please try again or send a clearer image.';
+  addMessage('ai', errorMsg);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -1542,7 +1584,10 @@ function showTyping() { const t = $('typingIndicator'); if (t) { t.style.display
 function hideTyping()  { const t = $('typingIndicator'); if (t) t.style.display = 'none'; }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   SEND HANDLER (unchanged)
+   SEND HANDLER
+   FIX 1: Image shown in chat INSTANTLY before backend call
+   FIX 2: Voice output ONLY fires when fromVoice === true
+   FIX 3: Image routes to /image-chat, text routes to /ask
 ═══════════════════════════════════════════════════════════════════════ */
 async function handleSend(fromVoice) {
   if (fromVoice === undefined) fromVoice = false;
@@ -1568,16 +1613,28 @@ async function handleSend(fromVoice) {
     return;
   }
 
+  if (hasImages) {
+    const imageFile = attachedFiles.find(f => f.type.startsWith('image/'));
+
+    // ── FIX 1: Show image in chat INSTANTLY (before backend) ──
+    showImageInChat(imageFile, msg);
+
+    // Clear state immediately so UI feels responsive
+    const capturedMsg = msg;
+    attachedFiles = []; renderAttachments();
+    ta.value = ''; autoResizeTextarea();
+
+    // Voice flag: do NOT speak image AI answers unless user used mic
+    shouldSpeakNextReply = fromVoice;
+
+    await sendImageToAI(imageFile, capturedMsg || '');
+    return;
+  }
+
+  // Text-only path (unchanged)
   if (msg) {
     shouldSpeakNextReply = fromVoice;
     addMessage('user', msg);
-  }
-  if (hasImages) {
-    const imageFile = attachedFiles.find(f => f.type.startsWith('image/'));
-    attachedFiles = []; renderAttachments();
-    ta.value = ''; autoResizeTextarea();
-    await sendImageToAI(imageFile, msg || '');
-    return;
   }
   if (attachedFiles.length) { attachedFiles = []; renderAttachments(); }
   ta.value = ''; autoResizeTextarea();
@@ -1590,13 +1647,83 @@ async function handleSend(fromVoice) {
   }
 }
 
+/**
+ * showImageInChat(imageFile, caption)
+ * Immediately renders the uploaded/captured image as a user bubble in the chat.
+ * Does NOT wait for backend response — instant feedback.
+ */
+function showImageInChat(imageFile, caption) {
+  const hero      = $('hero');
+  const container = $('chatMessages');
+  if (!container) return;
+  if (hero && hero.style.display !== 'none') {
+    hero.style.display = 'none';
+    container.classList.add('show');
+    container.style.display = 'flex';
+  }
+
+  const row = document.createElement('div');
+  row.className = 'message-row user';
+
+  const letter  = (currentUser && currentUser.firstName) ? currentUser.firstName.charAt(0).toUpperCase() : 'U';
+  const avatar  = document.createElement('img');
+  avatar.className = 'message-avatar';
+  avatar.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(letter)}&background=10a37f&color=fff`;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'message-bubble';
+  bubble.style.cssText = 'display:flex;flex-direction:column;gap:8px;max-width:280px;';
+
+  // Image preview
+  const imgEl = document.createElement('img');
+  imgEl.style.cssText = 'width:100%;max-width:260px;border-radius:12px;object-fit:cover;cursor:pointer;border:1px solid rgba(255,255,255,0.1);';
+  imgEl.alt = imageFile.name;
+  imgEl.title = 'Click to view full size';
+  imgEl.onclick = () => {
+    const win = window.open();
+    if (win) { win.document.write(`<img src="${imgEl.src}" style="max-width:100%;">`); }
+  };
+  const reader = new FileReader();
+  reader.onload = e => { imgEl.src = e.target.result; };
+  reader.readAsDataURL(imageFile);
+  bubble.appendChild(imgEl);
+
+  // Caption text (if any)
+  if (caption && caption.trim()) {
+    const captionEl = document.createElement('span');
+    captionEl.style.cssText = 'font-size:14px;color:var(--text-1,#f0f4ff);';
+    captionEl.textContent = caption;
+    bubble.appendChild(captionEl);
+  }
+
+  row.appendChild(bubble);
+  row.appendChild(avatar);
+  container.appendChild(row);
+  scrollToBottom();
+
+  // Save to conversation
+  if (currentConversationId) {
+    const conv = conversations.find(c => c.id === currentConversationId);
+    if (conv) {
+      const label = caption ? `🖼️ ${caption}` : '🖼️ [Image]';
+      conv.messages.push({ role: 'user', text: label });
+      if (conv.messages.filter(m => m.role === 'user').length === 1 && conv.title === 'New conversation') {
+        conv.title = label;
+      }
+      saveConversationsToLocalStorage();
+      renderConversationList();
+    }
+  }
+}
+
 function autoResizeTextarea() {
   const ta = $('msgTextarea');
   if (!ta) return;
   ta.style.height = 'auto';
   ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
   const sb = $('sendBtn');
-  if (sb) sb.disabled = ta.value.trim() === '';
+  // Enable send if there's text OR if there are attached images
+  if (sb) sb.disabled = ta.value.trim() === '' && attachedFiles.length === 0;
 }
 
 function renderAttachments() {
@@ -1606,7 +1733,36 @@ function renderAttachments() {
   attachedFiles.forEach((file, idx) => {
     const chip = document.createElement('div');
     chip.className = 'attachment-chip';
-    chip.innerHTML = `<span>${escapeHtml(file.name)} (${(file.size/1024).toFixed(1)} KB)</span><button class="remove-attach" data-idx="${idx}">✖</button>`;
+    chip.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 8px 4px 4px;';
+
+    if (file.type.startsWith('image/')) {
+      // Show real image thumbnail instantly
+      const thumb = document.createElement('img');
+      thumb.style.cssText = 'width:48px;height:48px;object-fit:cover;border-radius:8px;flex-shrink:0;border:1px solid rgba(255,255,255,0.1);';
+      thumb.alt = file.name;
+      const reader = new FileReader();
+      reader.onload = e => { thumb.src = e.target.result; };
+      reader.readAsDataURL(file);
+      chip.appendChild(thumb);
+    } else {
+      const icon = document.createElement('span');
+      icon.textContent = '📄';
+      icon.style.cssText = 'font-size:20px;flex-shrink:0;';
+      chip.appendChild(icon);
+    }
+
+    const info = document.createElement('span');
+    info.style.cssText = 'font-size:12px;color:var(--text-2,#8892a4);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+    info.textContent = `${file.name} (${(file.size/1024).toFixed(1)} KB)`;
+    chip.appendChild(info);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'remove-attach';
+    removeBtn.dataset.idx = idx;
+    removeBtn.textContent = '✖';
+    removeBtn.style.cssText = 'margin-left:4px;background:none;border:none;color:#8892a4;cursor:pointer;font-size:13px;padding:0;';
+    chip.appendChild(removeBtn);
+
     preview.appendChild(chip);
   });
   document.querySelectorAll('.remove-attach').forEach(btn => {
@@ -1999,19 +2155,203 @@ function initUserMenu() {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   ATTACHMENTS (unchanged)
+   ATTACHMENTS — Extended with Camera + Upload popup
+   Click 📎 → small popup appears: [📁 Upload File] [📷 Open Camera] [✕ Cancel]
+   Camera opens ONLY on click — never auto-starts
 ═══════════════════════════════════════════════════════════════════════ */
+
+let _cameraStream = null;
+
+/** Stop camera stream and remove the camera modal */
+function _closeCameraModal() {
+  if (_cameraStream) {
+    _cameraStream.getTracks().forEach(t => t.stop());
+    _cameraStream = null;
+  }
+  const m = $('ranaiCamModal');
+  if (m) m.remove();
+}
+
+/** Open camera capture modal — only called on explicit button click */
+async function _openCameraModal() {
+  if ($('ranaiCamModal')) return; // already open
+
+  const modal = document.createElement('div');
+  modal.id = 'ranaiCamModal';
+  modal.style.cssText = `position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.88);
+    display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);`;
+
+  modal.innerHTML = `
+    <div style="background:rgba(14,16,22,0.98);border:1px solid rgba(255,255,255,0.1);
+      border-radius:20px;overflow:hidden;width:min(460px,95vw);
+      box-shadow:0 30px 80px rgba(0,0,0,0.8);">
+      <!-- Header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;
+        padding:14px 18px;border-bottom:1px solid rgba(255,255,255,0.07);">
+        <span style="font-size:15px;font-weight:700;color:#f0f4ff;">📷 Camera</span>
+        <button id="ranaiCamClose" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.09);
+          color:#8892a4;border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:15px;line-height:1;">✕</button>
+      </div>
+      <!-- Video -->
+      <div style="position:relative;background:#000;aspect-ratio:4/3;width:100%;max-height:55vh;overflow:hidden;">
+        <video id="ranaiCamVideo" autoplay playsinline muted
+          style="width:100%;height:100%;object-fit:cover;display:block;"></video>
+        <div id="ranaiCamLoader" style="position:absolute;inset:0;display:flex;flex-direction:column;
+          align-items:center;justify-content:center;gap:8px;color:#8892a4;font-size:13px;pointer-events:none;">
+          <div style="font-size:36px;">📷</div><div>Starting camera…</div>
+        </div>
+        <canvas id="ranaiCamCanvas" style="display:none;"></canvas>
+      </div>
+      <!-- Actions -->
+      <div style="padding:16px 18px;display:flex;justify-content:center;gap:12px;flex-wrap:wrap;">
+        <button id="ranaiCamFlip" style="padding:10px 18px;border-radius:12px;
+          background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);
+          color:#f0f4ff;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">🔄 Flip</button>
+        <button id="ranaiCamCapture" style="padding:10px 30px;border-radius:12px;
+          background:linear-gradient(135deg,#10a37f,#0d8f6f);border:none;
+          color:#fff;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;
+          box-shadow:0 4px 18px rgba(16,163,127,0.35);">📸 Capture</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(modal);
+
+  // Close handlers
+  $('ranaiCamClose').onclick = _closeCameraModal;
+  modal.addEventListener('click', e => { if (e.target === modal) _closeCameraModal(); });
+
+  // Start camera
+  let facingMode = 'user';
+  const video  = $('ranaiCamVideo');
+  const loader = $('ranaiCamLoader');
+
+  async function startStream(facing) {
+    if (_cameraStream) _cameraStream.getTracks().forEach(t => t.stop());
+    try {
+      _cameraStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false
+      });
+      video.srcObject = _cameraStream;
+      video.onloadedmetadata = () => { if (loader) loader.style.display = 'none'; };
+    } catch (err) {
+      if (loader) loader.innerHTML = `<div style="text-align:center;color:#ff6b6b;font-size:13px;">
+        <div style="font-size:30px;margin-bottom:8px;">🚫</div>
+        Camera access denied.<br><span style="color:#8892a4;font-size:11px;">Allow camera in browser settings and retry.</span></div>`;
+      console.warn('[Camera]', err.message);
+    }
+  }
+  await startStream(facingMode);
+
+  $('ranaiCamFlip').onclick = async () => {
+    facingMode = facingMode === 'user' ? 'environment' : 'user';
+    if (loader) loader.style.display = 'flex';
+    await startStream(facingMode);
+  };
+
+  $('ranaiCamCapture').onclick = () => {
+    const canvas = $('ranaiCamCanvas');
+    if (!canvas || !video || !video.videoWidth) {
+      showToast('Camera not ready yet. Wait a moment.', 1800);
+      return;
+    }
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    canvas.toBlob(blob => {
+      if (!blob) { showToast('Capture failed. Try again.', 1800); return; }
+      const file = new File([blob], `camera_${Date.now()}.jpg`, { type: 'image/jpeg' });
+      attachedFiles.push(file);
+      renderAttachments();
+      // Enable send button since we now have a file
+      const sb = $('sendBtn');
+      if (sb) sb.disabled = false;
+      _closeCameraModal();
+      showToast('📷 Photo captured! Add a question or send.', 2200);
+    }, 'image/jpeg', 0.92);
+  };
+}
+
+/** Show the attach popup menu near the 📎 button */
+function _showAttachPopup(attachBtn, fileInput) {
+  // Toggle off if already open
+  const existing = $('ranaiAttachPopup');
+  if (existing) { existing.remove(); return; }
+
+  const popup = document.createElement('div');
+  popup.id = 'ranaiAttachPopup';
+
+  const r = attachBtn.getBoundingClientRect();
+  popup.style.cssText = `
+    position:fixed;
+    bottom:${window.innerHeight - r.top + 10}px;
+    left:${Math.max(8, r.left - 10)}px;
+    z-index:9990;
+    background:rgba(16,18,26,0.97);
+    border:1px solid rgba(255,255,255,0.11);
+    border-radius:14px;padding:6px;
+    box-shadow:0 14px 44px rgba(0,0,0,0.65);
+    backdrop-filter:blur(18px);
+    min-width:180px;
+    animation:_ranaiPop 0.14s ease;`;
+
+  popup.innerHTML = `
+    <style>
+      @keyframes _ranaiPop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+      ._rpbtn{width:100%;display:flex;align-items:center;gap:10px;padding:10px 14px;
+        border-radius:10px;border:none;background:transparent;color:#f0f4ff;
+        font-size:13.5px;font-weight:500;cursor:pointer;font-family:inherit;text-align:left;transition:background 0.15s;}
+      ._rpbtn:hover{background:rgba(255,255,255,0.08);}
+      ._rpdiv{height:1px;background:rgba(255,255,255,0.07);margin:4px 2px;}
+    </style>
+    <button class="_rpbtn" id="_rpUpload"><span style="font-size:17px;">📁</span> Upload File</button>
+    <button class="_rpbtn" id="_rpCamera"><span style="font-size:17px;">📷</span> Open Camera</button>
+    <div class="_rpdiv"></div>
+    <button class="_rpbtn" id="_rpCancel" style="color:#8892a4;"><span style="font-size:15px;">✕</span> Cancel</button>`;
+
+  document.body.appendChild(popup);
+
+  const close = () => { const p = $('ranaiAttachPopup'); if (p) p.remove(); };
+  $('_rpUpload').onclick = () => { close(); fileInput.click(); };
+  $('_rpCamera').onclick = () => { close(); _openCameraModal(); };
+  $('_rpCancel').onclick = close;
+
+  // Close on click outside
+  setTimeout(() => {
+    const handler = e => {
+      if (!$('ranaiAttachPopup')?.contains(e.target) && e.target !== attachBtn) {
+        close();
+        document.removeEventListener('click', handler, true);
+      }
+    };
+    document.addEventListener('click', handler, true);
+  }, 15);
+}
+
 function initAttachments() {
   const attachBtn = $('attachBtn');
   if (!attachBtn) return;
+
+  // Hidden file input (same as before)
   const fileInput = document.createElement('input');
-  fileInput.type = 'file'; fileInput.multiple = true; fileInput.style.display = 'none';
-  fileInput.accept = 'image/jpeg,image/jpg,image/png';
+  fileInput.type     = 'file';
+  fileInput.multiple = true;
+  fileInput.style.display = 'none';
+  fileInput.accept   = 'image/jpeg,image/jpg,image/png';
   document.body.appendChild(fileInput);
-  attachBtn.addEventListener('click', () => fileInput.click());
+
+  // Show popup instead of directly opening file picker
+  attachBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    _showAttachPopup(attachBtn, fileInput);
+  });
+
   fileInput.addEventListener('change', e => {
     attachedFiles.push(...Array.from(e.target.files));
     renderAttachments();
+    // Enable send button when files are added
+    const sb = $('sendBtn');
+    if (sb) sb.disabled = false;
     fileInput.value = '';
   });
 }
