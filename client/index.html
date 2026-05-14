@@ -532,6 +532,291 @@
     </div>
   </div>
 
+
+<!-- ═══════════════════════════════════════════════════════
+     NEW FEATURES: 7 Modals + Styles
+═══════════════════════════════════════════════════════ -->
+<style>
+/* Shared Modal Base */
+.ranai-modal-overlay{display:none;position:fixed;inset:0;z-index:9800;background:rgba(0,0,0,0.88);backdrop-filter:blur(12px);align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;}
+.ranai-modal-overlay.active{display:flex;}
+.ranai-modal{width:100%;max-width:580px;margin:auto;background:rgba(8,10,14,0.99);border:1px solid rgba(255,255,255,0.07);border-radius:24px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,0.8);position:relative;}
+.ranai-modal-header{display:flex;align-items:center;gap:12px;padding:18px 22px 14px;border-bottom:1px solid rgba(255,255,255,0.055);}
+.ranai-modal-icon{width:38px;height:38px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;}
+.ranai-modal-title{font-size:16px;font-weight:700;color:#f0f4ff;}
+.ranai-modal-sub{font-size:11.5px;color:#8892a4;margin-top:2px;}
+.ranai-modal-close{margin-left:auto;width:30px;height:30px;border-radius:8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.07);color:#8892a4;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:15px;transition:.2s;flex-shrink:0;}
+.ranai-modal-close:hover{background:rgba(255,255,255,0.1);color:#f0f4ff;}
+.ranai-modal-body{padding:20px 22px 22px;}
+.ranai-input{width:100%;background:#0a0c10;border:1px solid rgba(255,255,255,0.07);border-radius:10px;padding:11px 14px;font-size:13.5px;color:#f0f4ff;font-family:inherit;outline:none;transition:border-color .2s;}
+.ranai-input:focus{border-color:rgba(0,232,135,0.4);}
+.ranai-select{width:100%;background:#0a0c10;border:1px solid rgba(255,255,255,0.07);border-radius:10px;padding:11px 14px;font-size:13.5px;color:#f0f4ff;font-family:inherit;outline:none;cursor:pointer;appearance:none;}
+.ranai-btn{padding:12px 20px;border-radius:12px;font-size:13.5px;font-weight:700;cursor:pointer;border:none;font-family:inherit;transition:.2s;display:flex;align-items:center;justify-content:center;gap:8px;}
+.ranai-btn-primary{background:linear-gradient(135deg,#00e887,#00c96e);color:#030c07;box-shadow:0 4px 20px rgba(0,232,135,0.3);}
+.ranai-btn-primary:hover{opacity:.88;}
+.ranai-btn-sec{background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);color:#8892a4;}
+.ranai-btn-sec:hover{background:rgba(255,255,255,0.1);color:#f0f4ff;}
+.ranai-label{font-size:11px;font-weight:700;color:#8892a4;letter-spacing:.06em;text-transform:uppercase;display:block;margin-bottom:6px;}
+.ranai-result-box{background:rgba(0,232,135,0.04);border:1px solid rgba(0,232,135,0.1);border-radius:14px;padding:16px 18px;margin-top:16px;}
+.ranai-spinner{width:36px;height:36px;border-radius:50%;border:2.5px solid rgba(0,232,135,0.1);border-top-color:#00e887;animation:rnspin .8s linear infinite;margin:0 auto;}
+@keyframes rnspin{to{transform:rotate(360deg)}}
+.feature-shimmer{position:absolute;top:0;left:0;right:0;height:2px;border-radius:24px 24px 0 0;}
+/* News card */
+.news-card{background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.05);border-radius:12px;padding:14px 16px;margin-bottom:10px;transition:.2s;}
+.news-card:hover{border-color:rgba(244,114,182,0.3);background:rgba(244,114,182,0.03);}
+.news-title{font-size:13.5px;font-weight:600;color:#f0f4ff;margin-bottom:5px;line-height:1.4;}
+.news-snippet{font-size:12px;color:#8892a4;line-height:1.5;margin-bottom:8px;}
+.news-meta{display:flex;align-items:center;gap:10px;font-size:11px;color:#424d5c;}
+/* Calc display */
+.calc-display{background:#0a0c10;border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:14px 18px;margin-bottom:14px;min-height:64px;text-align:right;}
+.calc-expr{font-size:13px;color:#8892a4;min-height:18px;}
+.calc-result{font-size:28px;font-weight:700;color:#f0f4ff;font-family:'JetBrains Mono',monospace;}
+.calc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
+.calc-key{padding:13px 8px;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;border:none;font-family:inherit;transition:.15s;background:rgba(255,255,255,0.05);color:#f0f4ff;}
+.calc-key:hover{background:rgba(255,255,255,0.1);}
+.calc-key.op{color:#00e887;background:rgba(0,232,135,0.08);}
+.calc-key.eq{background:linear-gradient(135deg,#00e887,#00c96e);color:#030c07;}
+.calc-key.fn{font-size:11px;color:#a78bfa;background:rgba(167,139,250,0.08);}
+.calc-key.clr{color:#ff5c7c;background:rgba(255,92,124,0.08);}
+/* Analytics bars */
+.stat-bar-wrap{margin-bottom:10px;}
+.stat-bar-label{display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;}
+.stat-bar-bg{background:rgba(255,255,255,0.04);border-radius:6px;height:8px;overflow:hidden;}
+.stat-bar-fill{height:100%;border-radius:6px;transition:width .6s cubic-bezier(.34,1.2,.64,1);}
+/* Word cloud pills */
+.word-pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11.5px;font-weight:600;margin:3px;background:rgba(255,255,255,0.05);color:#8892a4;}
+.word-pill.top1{background:rgba(0,232,135,0.12);color:#00e887;}
+.word-pill.top2{background:rgba(59,130,246,0.12);color:#3b82f6;}
+.word-pill.top3{background:rgba(168,85,247,0.1);color:#a855f7;}
+/* Image grid */
+.img-variation-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;}
+.img-variation-grid img{width:100%;border-radius:10px;cursor:pointer;border:2px solid transparent;transition:.2s;}
+.img-variation-grid img:hover{border-color:#00e887;}
+/* Translate */
+.translate-lang-grid{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;margin-bottom:14px;}
+.lang-swap-btn{width:34px;height:34px;border-radius:50%;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.2);color:#34d399;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;transition:.2s;}
+.lang-swap-btn:hover{background:rgba(52,211,153,0.2);}
+</style>
+
+<!-- ═══ CALCULATOR MODAL ═══ -->
+<div class="ranai-modal-overlay" id="calcOverlay">
+  <div class="ranai-modal">
+    <div class="feature-shimmer" style="background:linear-gradient(90deg,transparent,#a78bfa,transparent);"></div>
+    <div class="ranai-modal-header">
+      <div class="ranai-modal-icon" style="background:rgba(167,139,250,0.12);border:1px solid rgba(167,139,250,0.2);">🧮</div>
+      <div><div class="ranai-modal-title">Advanced Calculator</div><div class="ranai-modal-sub">Scientific · AI-powered explanations</div></div>
+      <button class="ranai-modal-close" onclick="closeModal('calcOverlay')">✕</button>
+    </div>
+    <div class="ranai-modal-body">
+      <div class="calc-display">
+        <div class="calc-expr" id="calcExpr"></div>
+        <div class="calc-result" id="calcDisplay">0</div>
+      </div>
+      <div class="calc-grid" id="calcGrid">
+        <button class="calc-key fn" onclick="calcFn('Math.sin(')">sin</button>
+        <button class="calc-key fn" onclick="calcFn('Math.cos(')">cos</button>
+        <button class="calc-key fn" onclick="calcFn('Math.sqrt(')">√</button>
+        <button class="calc-key fn" onclick="calcFn('Math.log10(')">log</button>
+        <button class="calc-key fn" onclick="calcFn('Math.PI')">π</button>
+        <button class="calc-key fn" onclick="calcFn('**2')">x²</button>
+        <button class="calc-key fn" onclick="calcFn('**')">xⁿ</button>
+        <button class="calc-key fn" onclick="calcFn('%')">mod</button>
+        <button class="calc-key clr" onclick="calcClear()">C</button>
+        <button class="calc-key clr" onclick="calcBack()">⌫</button>
+        <button class="calc-key op" onclick="calcPress('(')">(</button>
+        <button class="calc-key op" onclick="calcPress(')')">)</button>
+        <button class="calc-key" onclick="calcPress('7')">7</button>
+        <button class="calc-key" onclick="calcPress('8')">8</button>
+        <button class="calc-key" onclick="calcPress('9')">9</button>
+        <button class="calc-key op" onclick="calcPress('/')">÷</button>
+        <button class="calc-key" onclick="calcPress('4')">4</button>
+        <button class="calc-key" onclick="calcPress('5')">5</button>
+        <button class="calc-key" onclick="calcPress('6')">6</button>
+        <button class="calc-key op" onclick="calcPress('*')">×</button>
+        <button class="calc-key" onclick="calcPress('1')">1</button>
+        <button class="calc-key" onclick="calcPress('2')">2</button>
+        <button class="calc-key" onclick="calcPress('3')">3</button>
+        <button class="calc-key op" onclick="calcPress('-')">−</button>
+        <button class="calc-key" onclick="calcPress('0')">0</button>
+        <button class="calc-key" onclick="calcPress('.')">.</button>
+        <button class="calc-key eq" onclick="calcEquals()" style="grid-column:span 2">=</button>
+        <button class="calc-key op" style="grid-column:1;margin-top:8px;" onclick="calcPress('+')">+</button>
+        <button class="calc-key fn" style="grid-column:span 3;margin-top:8px;font-size:12px;" id="calcAIBtn" onclick="calcAIExplain()">🤖 AI Explain Last Result</button>
+      </div>
+      <div id="calcAIResult" style="display:none;" class="ranai-result-box">
+        <div style="font-size:12px;color:#00e887;font-weight:700;margin-bottom:6px;">🤖 AI Explanation</div>
+        <div id="calcAIText" style="font-size:13px;color:#c0c8d8;line-height:1.6;"></div>
+      </div>
+      <div id="calcHistory" style="margin-top:12px;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ NEWS MODAL ═══ -->
+<div class="ranai-modal-overlay" id="newsOverlay">
+  <div class="ranai-modal" style="max-width:640px;">
+    <div class="feature-shimmer" style="background:linear-gradient(90deg,transparent,#f472b6,transparent);"></div>
+    <div class="ranai-modal-header">
+      <div class="ranai-modal-icon" style="background:rgba(244,114,182,0.12);border:1px solid rgba(244,114,182,0.2);">📰</div>
+      <div><div class="ranai-modal-title">Live News Feed</div><div class="ranai-modal-sub">Real-time · Powered by Tavily AI</div></div>
+      <button class="ranai-modal-close" onclick="closeModal('newsOverlay')">✕</button>
+    </div>
+    <div class="ranai-modal-body">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;" id="newsCatBtns"></div>
+      <div style="display:flex;gap:8px;margin-bottom:14px;">
+        <input class="ranai-input" id="newsSearchInput" placeholder="Search news…" style="flex:1;" />
+        <button class="ranai-btn ranai-btn-primary" onclick="fetchNews()" style="padding:11px 18px;white-space:nowrap;">Search</button>
+      </div>
+      <div id="newsLoading" style="display:none;text-align:center;padding:32px 0;"><div class="ranai-spinner"></div><div style="color:#8892a4;font-size:13px;margin-top:12px;">Fetching latest news…</div></div>
+      <div id="newsResults"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ TRANSLATE MODAL ═══ -->
+<div class="ranai-modal-overlay" id="translateOverlay">
+  <div class="ranai-modal">
+    <div class="feature-shimmer" style="background:linear-gradient(90deg,transparent,#34d399,transparent);"></div>
+    <div class="ranai-modal-header">
+      <div class="ranai-modal-icon" style="background:rgba(52,211,153,0.12);border:1px solid rgba(52,211,153,0.2);">🌍</div>
+      <div><div class="ranai-modal-title">AI Translator</div><div class="ranai-modal-sub">20+ languages · Auto-detect source</div></div>
+      <button class="ranai-modal-close" onclick="closeModal('translateOverlay')">✕</button>
+    </div>
+    <div class="ranai-modal-body">
+      <div class="translate-lang-grid">
+        <div><label class="ranai-label">From</label><select class="ranai-select" id="transFrom"><option value="auto">Auto Detect</option></select></div>
+        <button class="lang-swap-btn" onclick="swapLangs()" title="Swap languages">⇄</button>
+        <div><label class="ranai-label">To</label><select class="ranai-select" id="transTo"></select></div>
+      </div>
+      <label class="ranai-label">Text to Translate</label>
+      <textarea class="ranai-input" id="transInput" placeholder="Type or paste text here…" rows="4" style="resize:vertical;margin-bottom:12px;"></textarea>
+      <button class="ranai-btn ranai-btn-primary" onclick="doTranslate()" style="width:100%;">🌍 Translate</button>
+      <div id="transLoading" style="display:none;text-align:center;padding:24px;"><div class="ranai-spinner"></div></div>
+      <div id="transResult" style="display:none;" class="ranai-result-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-size:11.5px;color:#34d399;font-weight:700;" id="transLangLabel">Translation</div>
+          <button onclick="copyTrans()" style="font-size:11px;color:#8892a4;cursor:pointer;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.07);border-radius:6px;padding:3px 10px;">Copy</button>
+        </div>
+        <div id="transOutput" style="font-size:14px;color:#f0f4ff;line-height:1.7;"></div>
+        <div id="transConfidence" style="font-size:11px;color:#424d5c;margin-top:8px;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ IMAGE GENERATION MODAL ═══ -->
+<div class="ranai-modal-overlay" id="imgGenOverlay">
+  <div class="ranai-modal">
+    <div class="feature-shimmer" style="background:linear-gradient(90deg,transparent,#fb923c,transparent);"></div>
+    <div class="ranai-modal-header">
+      <div class="ranai-modal-icon" style="background:rgba(251,146,60,0.12);border:1px solid rgba(251,146,60,0.2);">🖼️</div>
+      <div><div class="ranai-modal-title">AI Image Generator</div><div class="ranai-modal-sub">Pollinations AI · Free · 7 styles</div></div>
+      <button class="ranai-modal-close" onclick="closeModal('imgGenOverlay')">✕</button>
+    </div>
+    <div class="ranai-modal-body">
+      <label class="ranai-label">Prompt</label>
+      <textarea class="ranai-input" id="imgPrompt" placeholder="Describe the image you want… e.g. 'A futuristic city at night with neon lights'" rows="3" style="resize:vertical;margin-bottom:12px;"></textarea>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+        <div><label class="ranai-label">Style</label>
+          <select class="ranai-select" id="imgStyle">
+            <option value="realistic">📷 Realistic</option>
+            <option value="anime">🎌 Anime</option>
+            <option value="painting">🖌️ Oil Painting</option>
+            <option value="cartoon">🎨 Cartoon</option>
+            <option value="sketch">✏️ Sketch</option>
+            <option value="3d">💎 3D Render</option>
+            <option value="watercolor">💧 Watercolor</option>
+          </select>
+        </div>
+        <div><label class="ranai-label">Size</label>
+          <select class="ranai-select" id="imgSize">
+            <option value="square">⬛ Square (1:1)</option>
+            <option value="wide">📺 Wide (16:9)</option>
+            <option value="portrait">📱 Portrait (3:4)</option>
+          </select>
+        </div>
+      </div>
+      <button class="ranai-btn ranai-btn-primary" onclick="generateImage()" style="width:100%;">✨ Generate Image</button>
+      <div id="imgLoading" style="display:none;text-align:center;padding:32px;"><div class="ranai-spinner"></div><div style="color:#8892a4;font-size:13px;margin-top:12px;">Generating your image…</div></div>
+      <div id="imgResult" style="display:none;margin-top:14px;">
+        <img id="imgMain" src="" alt="Generated" style="width:100%;border-radius:14px;border:1px solid rgba(255,255,255,0.08);" />
+        <div class="img-variation-grid" id="imgVariations"></div>
+        <div style="display:flex;gap:8px;margin-top:12px;">
+          <a id="imgDownload" href="#" download="ranai-image.jpg" class="ranai-btn ranai-btn-primary" style="flex:1;text-decoration:none;">⬇️ Download</a>
+          <button onclick="generateImage()" class="ranai-btn ranai-btn-sec" style="flex:1;">🔄 Regenerate</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ EXPORT MODAL ═══ -->
+<div class="ranai-modal-overlay" id="exportOverlay">
+  <div class="ranai-modal">
+    <div class="feature-shimmer" style="background:linear-gradient(90deg,transparent,#94a3b8,transparent);"></div>
+    <div class="ranai-modal-header">
+      <div class="ranai-modal-icon" style="background:rgba(148,163,184,0.12);border:1px solid rgba(148,163,184,0.2);">💬</div>
+      <div><div class="ranai-modal-title">Export Chat</div><div class="ranai-modal-sub">Save your conversation as a file</div></div>
+      <button class="ranai-modal-close" onclick="closeModal('exportOverlay')">✕</button>
+    </div>
+    <div class="ranai-modal-body">
+      <label class="ranai-label">Export Format</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
+        <button class="ranai-btn ranai-btn-primary" onclick="exportChat('txt')" style="flex-direction:column;gap:4px;padding:16px;">
+          <span style="font-size:22px;">📄</span><span>Plain Text (.txt)</span>
+        </button>
+        <button class="ranai-btn ranai-btn-sec" onclick="exportChat('md')" style="flex-direction:column;gap:4px;padding:16px;">
+          <span style="font-size:22px;">📝</span><span>Markdown (.md)</span>
+        </button>
+      </div>
+      <div id="exportInfo" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:14px;font-size:13px;color:#8892a4;line-height:1.6;">
+        Your chat will be downloaded as a file. Choose a format above to start.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ ANALYTICS MODAL ═══ -->
+<div class="ranai-modal-overlay" id="analyticsOverlay">
+  <div class="ranai-modal" style="max-width:620px;">
+    <div class="feature-shimmer" style="background:linear-gradient(90deg,transparent,#60a5fa,transparent);"></div>
+    <div class="ranai-modal-header">
+      <div class="ranai-modal-icon" style="background:rgba(96,165,250,0.12);border:1px solid rgba(96,165,250,0.2);">📊</div>
+      <div><div class="ranai-modal-title">Chat Analytics</div><div class="ranai-modal-sub">Insights about your conversations</div></div>
+      <button class="ranai-modal-close" onclick="closeModal('analyticsOverlay')">✕</button>
+    </div>
+    <div class="ranai-modal-body">
+      <div id="analyticsLoading" style="text-align:center;padding:32px;"><div class="ranai-spinner"></div><div style="color:#8892a4;font-size:13px;margin-top:12px;">Analyzing your chat…</div></div>
+      <div id="analyticsResult" style="display:none;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ URL SUMMARIZER MODAL ═══ -->
+<div class="ranai-modal-overlay" id="summarizerOverlay">
+  <div class="ranai-modal">
+    <div class="feature-shimmer" style="background:linear-gradient(90deg,transparent,#e879f9,transparent);"></div>
+    <div class="ranai-modal-header">
+      <div class="ranai-modal-icon" style="background:rgba(232,121,249,0.12);border:1px solid rgba(232,121,249,0.2);">🌐</div>
+      <div><div class="ranai-modal-title">Website Summarizer</div><div class="ranai-modal-sub">Paste any URL · AI reads it for you</div></div>
+      <button class="ranai-modal-close" onclick="closeModal('summarizerOverlay')">✕</button>
+    </div>
+    <div class="ranai-modal-body">
+      <label class="ranai-label">Website URL</label>
+      <input class="ranai-input" id="sumUrl" placeholder="https://example.com" style="margin-bottom:10px;" />
+      <div style="display:flex;gap:10px;margin-bottom:14px;">
+        <div style="flex:1;"><label class="ranai-label">Language</label>
+          <select class="ranai-select" id="sumLang"><option value="en">English</option><option value="hi">Hindi</option></select>
+        </div>
+      </div>
+      <button class="ranai-btn ranai-btn-primary" onclick="summarizeUrl()" style="width:100%;">🌐 Summarize Website</button>
+      <div id="sumLoading" style="display:none;text-align:center;padding:28px;"><div class="ranai-spinner"></div><div style="color:#8892a4;font-size:13px;margin-top:12px;">Reading website…</div></div>
+      <div id="sumResult" style="display:none;margin-top:14px;"></div>
+    </div>
+  </div>
+</div>
+
+
   <script src="script.js"></script>
 </body>
 </html>
