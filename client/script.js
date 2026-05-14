@@ -3010,3 +3010,289 @@ Return: {"message":"...","total_found":7,"jobs":[...],"suggestions":["...","..."
     wireSJButtons();
   }
 })();
+// ========== 🌦️ LIVE WEATHER COMMAND ==========
+async function handleWeatherCommand(location, userLang) {
+  if (!location) return false;
+  const isHindi = userLang === 'hi';
+  try {
+    const response = await fetch(`${API}/weather-live?location=${encodeURIComponent(location)}&lang=${isHindi ? 'hi' : 'en'}`);
+    if (!response.ok) throw new Error(await response.text());
+    const data = await response.json();
+    if (data.success && data.weather) {
+      addMessage('ai', data.weather, true);
+      return true;
+    } else throw new Error(data.error || 'No weather');
+  } catch (err) {
+    const errorMsg = isHindi
+      ? `"${location}" के लिए मौसम नहीं मिला। कृपया सही जिला / गाँव / शहर का नाम लिखें।`
+      : `Could not fetch weather for "${location}". Please check the name.`;
+    addMessage('ai', errorMsg, true);
+    return false;
+  }
+}
+
+// ========== 🕒 INDIA TIME COMMAND ==========
+async function handleTimeCommand() {
+  try {
+    const res = await fetch(`${API}/time-india`);
+    const data = await res.json();
+    if (data.success && data.reply) {
+      addMessage('ai', data.reply, true);
+    } else throw new Error('No time data');
+  } catch (err) {
+    addMessage('ai', '⏰ Unable to fetch India time. Check connection.', true);
+  }
+}
+
+// Intercept sendMessageToAI (preserve original)
+const originalSendMessageToAI = window.sendMessageToAI;
+window.sendMessageToAI = async function(question) {
+  const lowerQ = question.toLowerCase().trim();
+  const weatherPattern = /^weather\s+in\s+(.+)$|^mausam\s+(.+)$|^weather\s+(.+)$/i;
+  let match = lowerQ.match(weatherPattern);
+  if (match) {
+    let location = match[1] || match[2] || match[3];
+    if (location) {
+      location = location.trim();
+      const lang = detectLanguage(question);
+      await handleWeatherCommand(location, lang);
+      return;
+    }
+  }
+  if (lowerQ === 'time india' || lowerQ === 'india time' || lowerQ === 'ist time' || lowerQ === 'current time india') {
+    await handleTimeCommand();
+    return;
+  }
+  return originalSendMessageToAI(question);
+};
+console.log('✅ Weather & Time commands added – type "weather in Delhi" or "time india"');
+
+
+// ═══════════════════════════════════════════════════════
+// RANAI NEW FEATURES JS
+// ═══════════════════════════════════════════════════════
+
+// ── Modal helpers ──
+function openModal(id){ document.getElementById(id).classList.add('active'); }
+function closeModal(id){ document.getElementById(id).classList.remove('active'); }
+
+// Close on overlay click
+document.querySelectorAll('.ranai-modal-overlay').forEach(el=>{
+  el.addEventListener('click',e=>{ if(e.target===el) el.classList.remove('active'); });
+});
+
+// ── Button wiring (safe: only bind if elements exist) ──
+const _bind = (id, fn) => { const el = document.getElementById(id); if(el) el.addEventListener('click', fn); };
+_bind('calcBtn',      () => openModal('calcOverlay'));
+_bind('newsBtn',      () => { openModal('newsOverlay'); initNews(); });
+_bind('translateBtn', () => { openModal('translateOverlay'); initTranslate(); });
+_bind('imgGenBtn',    () => openModal('imgGenOverlay'));
+_bind('exportBtn',    () => { updateExportInfo(); openModal('exportOverlay'); });
+_bind('analyticsBtn', () => { openModal('analyticsOverlay'); runAnalytics(); });
+_bind('summarizerBtn',() => openModal('summarizerOverlay'));
+
+// ════════════════════════════
+// 🧮 CALCULATOR
+// ════════════════════════════
+let calcExpr = '', calcLastResult = '';
+function calcPress(v){ calcExpr += v; document.getElementById('calcDisplay').textContent = calcExpr || '0'; document.getElementById('calcExpr').textContent=''; }
+function calcFn(v){ calcExpr += v; document.getElementById('calcDisplay').textContent = calcExpr; }
+function calcBack(){ calcExpr = calcExpr.slice(0,-1); document.getElementById('calcDisplay').textContent = calcExpr || '0'; }
+function calcClear(){ calcExpr=''; calcLastResult=''; document.getElementById('calcDisplay').textContent='0'; document.getElementById('calcExpr').textContent=''; document.getElementById('calcAIResult').style.display='none'; }
+async function calcEquals(){
+  if(!calcExpr) return;
+  try{
+    const res = await fetch('/calculator',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({expr:calcExpr}) });
+    const data = await res.json();
+    if(data.success){
+      document.getElementById('calcExpr').textContent = calcExpr + ' =';
+      document.getElementById('calcDisplay').textContent = data.result;
+      calcLastResult = data.result;
+      if(data.explanation){ document.getElementById('calcAIText').textContent=data.explanation; document.getElementById('calcAIResult').style.display='block'; }
+      const hist = document.getElementById('calcHistory');
+      hist.innerHTML = `<div style="font-size:11px;color:#8892a4;margin-bottom:4px;">History</div>` + (data.history||[]).slice(-5).reverse().map(h=>`<div style="font-size:12px;color:#424d5c;padding:3px 0;">${h.expr} = <span style="color:#00e887;">${h.result}</span></div>`).join('');
+      calcExpr = data.result;
+    } else { document.getElementById('calcDisplay').textContent = 'Error'; calcExpr=''; }
+  } catch(e){ document.getElementById('calcDisplay').textContent='Error'; }
+}
+async function calcAIExplain(){
+  if(!calcLastResult) return;
+  const btn = document.getElementById('calcAIBtn');
+  btn.textContent='Loading…'; btn.disabled=true;
+  try{
+    const res = await fetch('/calculator',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({expr:calcExpr||calcLastResult}) });
+    const data = await res.json();
+    if(data.explanation){ document.getElementById('calcAIText').textContent=data.explanation; document.getElementById('calcAIResult').style.display='block'; }
+  }catch(_){}
+  btn.textContent='🤖 AI Explain Last Result'; btn.disabled=false;
+}
+
+// ════════════════════════════
+// 📰 NEWS
+// ════════════════════════════
+const NEWS_CATS = [{k:'general',l:'🗞️ Top',c:'#f472b6'},{k:'tech',l:'💻 Tech',c:'#60a5fa'},{k:'sports',l:'🏏 Sports',c:'#34d399'},{k:'cricket',l:'🏏 Cricket',c:'#00e887'},{k:'business',l:'💼 Business',c:'#fb923c'},{k:'entertainment',l:'🎬 Entertainment',c:'#a78bfa'},{k:'health',l:'❤️ Health',c:'#f87171'},{k:'world',l:'🌍 World',c:'#94a3b8'}];
+let activeNewsCat = 'general';
+function initNews(){
+  const wrap = document.getElementById('newsCatBtns');
+  if(wrap.children.length) return;
+  wrap.innerHTML = NEWS_CATS.map(c=>`<button onclick="setNewsCat('${c.k}')" id="ncat_${c.k}" style="padding:6px 14px;border-radius:20px;font-size:12.5px;font-weight:600;cursor:pointer;border:1px solid rgba(255,255,255,0.07);background:rgba(255,255,255,0.04);color:#8892a4;font-family:inherit;transition:.2s;">${c.l}</button>`).join('');
+  setNewsCat('general');
+}
+function setNewsCat(cat){ activeNewsCat=cat; document.querySelectorAll('[id^="ncat_"]').forEach(b=>{b.style.background='rgba(255,255,255,0.04)';b.style.color='#8892a4';}); const btn=document.getElementById('ncat_'+cat); if(btn){btn.style.background='rgba(244,114,182,0.1)';btn.style.color='#f472b6';} fetchNews(); }
+async function fetchNews(){
+  const q = document.getElementById('newsSearchInput').value.trim();
+  document.getElementById('newsLoading').style.display='block';
+  document.getElementById('newsResults').innerHTML='';
+  try{
+    const url = `/news?category=${activeNewsCat}&lang=en${q?'&q='+encodeURIComponent(q):''}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    document.getElementById('newsLoading').style.display='none';
+    if(!data.success||!data.articles.length){ document.getElementById('newsResults').innerHTML='<div style="color:#8892a4;text-align:center;padding:20px;">No news found. Try a different search.</div>'; return; }
+    document.getElementById('newsResults').innerHTML = `<div style="font-size:13px;color:#f0f4ff;margin-bottom:12px;line-height:1.6;padding:12px;background:rgba(244,114,182,0.04);border:1px solid rgba(244,114,182,0.08);border-radius:10px;">${data.summary}</div>` + data.articles.map(a=>`<div class="news-card"><div class="news-title"><a href="${a.url}" target="_blank" style="color:#f0f4ff;text-decoration:none;">${a.title}</a></div><div class="news-snippet">${a.snippet}</div><div class="news-meta"><span>🌐 ${a.source}</span>${a.published?`<span>📅 ${a.published}</span>`:''}<a href="${a.url}" target="_blank" style="margin-left:auto;color:#f472b6;font-size:11px;">Read →</a></div></div>`).join('');
+  } catch(e){ document.getElementById('newsLoading').style.display='none'; document.getElementById('newsResults').innerHTML='<div style="color:#ff5c7c;text-align:center;padding:20px;">Failed to fetch news. Try again.</div>'; }
+}
+
+// ════════════════════════════
+// 🌍 TRANSLATE
+// ════════════════════════════
+const TRANS_LANGS = [{c:'auto',n:'Auto Detect'},{c:'en',n:'English'},{c:'hi',n:'Hindi'},{c:'bn',n:'Bengali'},{c:'ta',n:'Tamil'},{c:'te',n:'Telugu'},{c:'mr',n:'Marathi'},{c:'gu',n:'Gujarati'},{c:'pa',n:'Punjabi'},{c:'ur',n:'Urdu'},{c:'fr',n:'French'},{c:'de',n:'German'},{c:'es',n:'Spanish'},{c:'it',n:'Italian'},{c:'pt',n:'Portuguese'},{c:'ru',n:'Russian'},{c:'ja',n:'Japanese'},{c:'ko',n:'Korean'},{c:'zh',n:'Chinese'},{c:'ar',n:'Arabic'},{c:'tr',n:'Turkish'}];
+function initTranslate(){
+  const from=document.getElementById('transFrom'), to=document.getElementById('transTo');
+  if(from.options.length>1) return;
+  from.innerHTML=TRANS_LANGS.map(l=>`<option value="${l.c}">${l.n}</option>`).join('');
+  to.innerHTML=TRANS_LANGS.filter(l=>l.c!=='auto').map(l=>`<option value="${l.c}"${l.c==='hi'?' selected':''}>${l.n}</option>`).join('');
+}
+function swapLangs(){ const f=document.getElementById('transFrom'),t=document.getElementById('transTo'),fv=f.value,tv=t.value; if(fv!=='auto'){f.value=tv;t.value=fv;} }
+async function doTranslate(){
+  const text=document.getElementById('transInput').value.trim();
+  if(!text){ return; }
+  document.getElementById('transLoading').style.display='block';
+  document.getElementById('transResult').style.display='none';
+  try{
+    const res = await fetch('/translate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,from:document.getElementById('transFrom').value,to:document.getElementById('transTo').value,autoDetect:true})});
+    const data = await res.json();
+    document.getElementById('transLoading').style.display='none';
+    if(data.success){
+      document.getElementById('transOutput').textContent=data.translated;
+      document.getElementById('transLangLabel').textContent=`${data.from} → ${data.targetLang}`;
+      document.getElementById('transConfidence').textContent=`Confidence: ${Math.round((data.confidence||0.9)*100)}% · ${data.characters} chars`;
+      document.getElementById('transResult').style.display='block';
+    } else { document.getElementById('transLoading').innerHTML='<div style="color:#ff5c7c;">Translation failed. Try again.</div>'; }
+  } catch(e){ document.getElementById('transLoading').style.display='none'; }
+}
+function copyTrans(){ navigator.clipboard.writeText(document.getElementById('transOutput').textContent); }
+
+// ════════════════════════════
+// 🖼️ IMAGE GENERATION
+// ════════════════════════════
+async function generateImage(){
+  const prompt=document.getElementById('imgPrompt').value.trim();
+  if(!prompt){ document.getElementById('imgPrompt').focus(); return; }
+  document.getElementById('imgLoading').style.display='block';
+  document.getElementById('imgResult').style.display='none';
+  try{
+    const res = await fetch('/generate-image-pro',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt,style:document.getElementById('imgStyle').value,size:document.getElementById('imgSize').value})});
+    const data = await res.json();
+    document.getElementById('imgLoading').style.display='none';
+    if(data.success){
+      const img=document.getElementById('imgMain');
+      img.src=data.imageUrl; img.onload=()=>{ document.getElementById('imgResult').style.display='block'; };
+      document.getElementById('imgDownload').href=data.imageUrl;
+      document.getElementById('imgVariations').innerHTML=(data.variations||[]).map(v=>`<img src="${v}" alt="variation" onclick="document.getElementById('imgMain').src='${v}'; document.getElementById('imgDownload').href='${v}';" />`).join('');
+    } else { document.getElementById('imgLoading').innerHTML=`<div style="color:#ff5c7c;">${data.error||'Generation failed'}</div>`; }
+  } catch(e){ document.getElementById('imgLoading').style.display='none'; }
+}
+
+// ════════════════════════════
+// 💬 EXPORT CHAT
+// ════════════════════════════
+function updateExportInfo(){
+  const msgs = getMessages();
+  document.getElementById('exportInfo').textContent = msgs.length
+    ? `📊 ${msgs.length} messages ready to export. Choose a format.`
+    : '⚠️ No messages to export yet. Start a chat first!';
+}
+function getMessages(){
+  const els = document.querySelectorAll('.chat-messages [data-role]');
+  if(els.length){
+    return Array.from(els).map(el=>({role:el.dataset.role,content:el.innerText}));
+  }
+  return (typeof chatHistory!=='undefined' && chatHistory) ? chatHistory : [];
+}
+async function exportChat(format){
+  const messages = getMessages();
+  if(!messages.length){ document.getElementById('exportInfo').textContent='⚠️ No messages found to export!'; return; }
+  try{
+    const res = await fetch('/export-chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages,format,title:'RanAI Chat Export'})});
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download=`ranai-chat.${format}`; a.click();
+    URL.revokeObjectURL(url);
+    document.getElementById('exportInfo').textContent='✅ Chat exported successfully!';
+  } catch(e){ document.getElementById('exportInfo').textContent='❌ Export failed. Try again.'; }
+}
+
+// ════════════════════════════
+// 📊 ANALYTICS
+// ════════════════════════════
+async function runAnalytics(){
+  document.getElementById('analyticsLoading').style.display='block';
+  document.getElementById('analyticsResult').style.display='none';
+  const messages = getMessages();
+  if(!messages.length){
+    document.getElementById('analyticsLoading').innerHTML='<div style="color:#8892a4;text-align:center;">No chat messages yet. Start a conversation first!</div>';
+    return;
+  }
+  try{
+    const res = await fetch('/chat-analytics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages})});
+    const data = await res.json();
+    document.getElementById('analyticsLoading').style.display='none';
+    if(!data.success){ document.getElementById('analyticsResult').innerHTML='<div style="color:#ff5c7c;">Analytics failed.</div>'; document.getElementById('analyticsResult').style.display='block'; return; }
+    const o=data.overview, l=data.language, b=data.behaviour;
+    const langTotal = l.hindi+l.english+l.hinglish||1;
+    document.getElementById('analyticsResult').innerHTML = `
+      ${data.aiInsight?`<div style="background:rgba(96,165,250,0.06);border:1px solid rgba(96,165,250,0.15);border-radius:12px;padding:14px 16px;margin-bottom:16px;font-size:13px;color:#c0c8d8;line-height:1.6;"><span style="color:#60a5fa;font-weight:700;">🤖 AI Insight</span><br>${data.aiInsight}</div>`:''}
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px;">
+        ${[['💬','Total Msgs',o.totalMessages,'#f0f4ff'],['👤','Your Msgs',o.userMessages,'#60a5fa'],['🤖','AI Replies',o.botMessages,'#00e887'],['📏','Avg Length',o.avgUserLength+' chars','#fb923c'],['❓','Questions',b.questionsAsked,'#a78bfa'],['👋','Greetings',b.greetings,'#f472b6']].map(([ic,lb,val,cl])=>`<div style="background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.05);border-radius:10px;padding:12px;text-align:center;"><div style="font-size:18px;">${ic}</div><div style="font-size:11px;color:#8892a4;margin:4px 0;">${lb}</div><div style="font-size:16px;font-weight:700;color:${cl};">${val}</div></div>`).join('')}
+      </div>
+      <div style="margin-bottom:16px;">
+        <div style="font-size:12px;font-weight:700;color:#8892a4;letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px;">Language Usage</div>
+        ${[['Hindi',l.hindi,langTotal,'#f0f4ff','#00e887'],['English',l.english,langTotal,'#8892a4','#60a5fa'],['Hinglish',l.hinglish,langTotal,'#424d5c','#a78bfa']].map(([n,v,t,tc,bc])=>`<div class="stat-bar-wrap"><div class="stat-bar-label"><span style="color:${tc};">${n}</span><span style="color:${bc};">${Math.round(v/t*100)}% (${v})</span></div><div class="stat-bar-bg"><div class="stat-bar-fill" style="width:${Math.round(v/t*100)}%;background:${bc};"></div></div></div>`).join('')}
+      </div>
+      <div style="margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:700;color:#8892a4;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px;">Top Words</div>
+        <div>${(data.topWords||[]).slice(0,12).map((w,i)=>`<span class="word-pill${i===0?' top1':i<=1?' top2':i<=2?' top3':''}">${w.word} <span style="opacity:.6;">${w.count}</span></span>`).join('')}</div>
+      </div>
+      <div style="font-size:11px;color:#424d5c;text-align:right;margin-top:8px;">Analyzed at ${data.analyzed_at}</div>`;
+    document.getElementById('analyticsResult').style.display='block';
+  } catch(e){ document.getElementById('analyticsLoading').innerHTML='<div style="color:#ff5c7c;">Analytics failed. Try again.</div>'; }
+}
+
+// ════════════════════════════
+// 🌐 URL SUMMARIZER
+// ════════════════════════════
+async function summarizeUrl(){
+  const url=document.getElementById('sumUrl').value.trim();
+  if(!url||!url.startsWith('http')){ document.getElementById('sumUrl').focus(); return; }
+  document.getElementById('sumLoading').style.display='block';
+  document.getElementById('sumResult').style.display='none';
+  const lang=document.getElementById('sumLang').value;
+  try{
+    const res = await fetch('/summarize-url',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,lang})});
+    const data = await res.json();
+    document.getElementById('sumLoading').style.display='none';
+    if(data.success){
+      const sentColor = data.sentiment==='Positive'?'#00e887':data.sentiment==='Negative'?'#ff5c7c':'#8892a4';
+      document.getElementById('sumResult').innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+          <div style="font-size:12px;color:#8892a4;">🌐 ${data.domain}</div>
+          <div style="margin-left:auto;padding:3px 10px;border-radius:20px;font-size:11.5px;font-weight:700;background:rgba(255,255,255,0.05);color:${sentColor};">${data.sentiment}</div>
+        </div>
+        <div style="font-size:13.5px;color:#f0f4ff;line-height:1.7;margin-bottom:14px;padding:14px;background:rgba(232,121,249,0.04);border:1px solid rgba(232,121,249,0.1);border-radius:12px;">${data.summary}</div>
+        ${data.keyPoints&&data.keyPoints.length?`<div style="font-size:12px;font-weight:700;color:#8892a4;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px;">Key Points</div><ul style="padding-left:18px;margin:0;">${data.keyPoints.map(p=>`<li style="font-size:13px;color:#c0c8d8;margin-bottom:6px;line-height:1.5;">${p}</li>`).join('')}</ul>`:''}
+        <div style="margin-top:12px;font-size:11px;color:#424d5c;">~${data.wordCount} words extracted · ${data.summarized_at}</div>`;
+      document.getElementById('sumResult').style.display='block';
+    } else { document.getElementById('sumResult').innerHTML=`<div style="color:#ff5c7c;text-align:center;padding:16px;">${data.error||'Summarization failed'}</div>`; document.getElementById('sumResult').style.display='block'; }
+  } catch(e){ document.getElementById('sumLoading').style.display='none'; document.getElementById('sumResult').innerHTML='<div style="color:#ff5c7c;text-align:center;">Failed. Try again.</div>'; document.getElementById('sumResult').style.display='block'; }
+}
