@@ -564,6 +564,536 @@ function detectLanguage(text) {
   if (/[\u0C00-\u0C7F]/.test(t)) return 'te';
   if (/[\u0A80-\u0AFF]/.test(t)) return 'gu';
   if (/[\u0A00-\u0A7F]/.test(t)) return 'pa';
+  if (/\b(namaste|kaise|kya|haal|chal|thik|bahut|mujhe|aap|main|btao|shukriya|dhanyawad|nahi|nhi|kyun|kab|kahan|kha|kaun|mera|    document.head.appendChild(script);
+  });
+}
+loadTesseract().catch(e => console.warn('Tesseract failed to load', e));
+
+/* ═══════════════════════════════════════════════════════════════════════
+   PARTICLE BACKGROUND (unchanged)
+═══════════════════════════════════════════════════════════════════════ */
+(function initParticles() {
+  const canvas = $('particleCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  let W, H, particles = [], mouse = { x: -999, y: -999 };
+
+  function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+  resize();
+  window.addEventListener('resize', resize);
+
+  function rand(min, max) { return Math.random() * (max - min) + min; }
+  function makeParticle() {
+    return { x: rand(0,W), y: rand(0,H), vx: rand(-0.18,0.18), vy: rand(-0.12,0.12), r: rand(1,2.2), alpha: rand(0.2,0.5) };
+  }
+  for (let i = 0; i < 90; i++) particles.push(makeParticle());
+  document.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    for (let i = 0; i < particles.length; i++) {
+      for (let j = i + 1; j < particles.length; j++) {
+        const dx = particles[i].x - particles[j].x, dy = particles[i].y - particles[j].y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < 110) {
+          ctx.beginPath();
+          ctx.strokeStyle = `rgba(0,229,160,${0.07 * (1 - dist/110)})`;
+          ctx.lineWidth = 0.6;
+          ctx.moveTo(particles[i].x, particles[i].y);
+          ctx.lineTo(particles[j].x, particles[j].y);
+          ctx.stroke();
+        }
+      }
+    }
+    particles.forEach(p => {
+      const mx = mouse.x - p.x, my = mouse.y - p.y;
+      const md = Math.sqrt(mx*mx + my*my);
+      if (md < 140) { p.vx += mx * 0.00015; p.vy += my * 0.00015; }
+      const spd = Math.sqrt(p.vx*p.vx + p.vy*p.vy);
+      if (spd > 0.5) { p.vx *= 0.5/spd; p.vy *= 0.5/spd; }
+      p.x += p.vx; p.y += p.vy;
+      if (p.x < 0) p.x = W; if (p.x > W) p.x = 0;
+      if (p.y < 0) p.y = H; if (p.y > H) p.y = 0;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+      ctx.fillStyle = `rgba(0,229,160,${p.alpha})`;
+      ctx.fill();
+    });
+    requestAnimationFrame(draw);
+  }
+  draw();
+})();
+
+/* ═══════════════════════════════════════════════════════════════════════
+   TOAST & UTILS
+═══════════════════════════════════════════════════════════════════════ */
+function showToast(msg, duration) {
+  duration = duration || 2200;
+  const existing = document.querySelector('.ranai-toast');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.className = 'ranai-toast';
+  toast.innerText = msg;
+  toast.style.cssText = `
+    position:fixed;bottom:90px;left:50%;transform:translateX(-50%) translateY(10px);
+    background:rgba(22,24,29,0.95);color:#eef0f4;
+    padding:9px 20px;border-radius:30px;z-index:9999;
+    font-size:13px;font-family:'Sora',sans-serif;font-weight:500;
+    border:1px solid rgba(255,255,255,0.1);
+    box-shadow:0 6px 24px rgba(0,0,0,0.4);
+    backdrop-filter:blur(10px);
+    transition:opacity 0.25s,transform 0.25s;opacity:0;`;
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => {
+    toast.style.opacity = '1';
+    toast.style.transform = 'translateX(-50%) translateY(0)';
+  });
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateX(-50%) translateY(6px)';
+    setTimeout(() => toast.remove(), 280);
+  }, duration);
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  return escapeHtml(text)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   TYPING ANIMATION – ChatGPT-style word-by-word reveal
+═══════════════════════════════════════════════════════════════════════ */
+function typeAIMessage(bubble, text, onDone) {
+  // Split into tokens: preserve spaces so we can animate word by word
+  const tokens = text.split(/(\s+)/);
+  let i = 0;
+  let rendered = '';
+
+  // Cursor blink element
+  const cursor = document.createElement('span');
+  cursor.className = 'ranai-typing-cursor';
+  cursor.innerHTML = '▋';
+  cursor.style.cssText = 'display:inline-block;margin-left:1px;animation:ranai-cursor-blink 0.7s step-start infinite;opacity:1;color:var(--accent,#10a37f);font-size:0.9em;';
+
+  bubble.innerHTML = '';
+  bubble.appendChild(cursor);
+
+  // Inject cursor blink keyframes once
+  if (!document.getElementById('ranai-cursor-style')) {
+    const style = document.createElement('style');
+    style.id = 'ranai-cursor-style';
+    style.textContent = `@keyframes ranai-cursor-blink{0%,100%{opacity:1}50%{opacity:0}}`;
+    document.head.appendChild(style);
+  }
+
+  // Speed: ~18ms per token gives smooth ChatGPT-like feel
+  const DELAY = 18;
+
+  function step() {
+    if (i >= tokens.length) {
+      // Done — remove cursor, render final HTML properly
+      bubble.innerHTML = renderMarkdown(text);
+      scrollToBottom();
+      if (typeof onDone === 'function') onDone();
+      return;
+    }
+    rendered += tokens[i];
+    i++;
+    // Re-render with cursor appended
+    bubble.innerHTML = renderMarkdown(rendered);
+    bubble.appendChild(cursor);
+    scrollToBottom();
+    setTimeout(step, DELAY);
+  }
+  step();
+}
+
+function scrollToBottom() {
+  const area = document.querySelector('.chat-scroll-area');
+  if (area) area.scrollTo({ top: area.scrollHeight, behavior: 'smooth' });
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   AUTH – Tab switch (unchanged)
+═══════════════════════════════════════════════════════════════════════ */
+function switchTab(tab) {
+  const loginForm  = $('loginForm');
+  const signupForm = $('signupForm');
+  const tabLogin   = $('tabLogin');
+  const tabSignup  = $('tabSignup');
+  if (tab === 'login') {
+    loginForm.style.display  = 'flex';
+    signupForm.style.display = 'none';
+    tabLogin.classList.add('active');
+    tabSignup.classList.remove('active');
+    $('loginError').innerText  = '';
+  } else {
+    loginForm.style.display  = 'none';
+    signupForm.style.display = 'flex';
+    tabSignup.classList.add('active');
+    tabLogin.classList.remove('active');
+    $('signupError').innerText = '';
+  }
+}
+
+function togglePass(inputId, btn) {
+  const inp = $(inputId);
+  if (!inp) return;
+  const show = inp.type === 'password';
+  inp.type = show ? 'text' : 'password';
+  btn.title = show ? 'Hide' : 'Show';
+  btn.style.opacity = show ? '1' : '0.5';
+}
+
+function checkPwdStrength(val) {
+  const bar = $('pwdBar');
+  if (!bar) return;
+
+  const ruleLen     = $('rule-len');
+  const ruleLetter  = $('rule-letter');
+  const ruleDigit   = $('rule-digit');
+  const ruleSpecial = $('rule-special');
+
+  const lenOk     = val.length === 10;
+  const letterOk  = /[a-zA-Z]/.test(val);
+  const digitOk   = /\d/.test(val);
+  const specialOk = /[^a-zA-Z0-9]/.test(val);
+
+  setRule(ruleLen,     lenOk,     '✓ Exactly 10 characters',          '✗ Exactly 10 characters');
+  setRule(ruleLetter,  letterOk,  '✓ At least 1 letter',              '✗ At least 1 letter');
+  setRule(ruleDigit,   digitOk,   '✓ At least 1 number',              '✗ At least 1 number');
+  setRule(ruleSpecial, specialOk, '✓ At least 1 special char',        '✗ At least 1 special char');
+
+  const score = [lenOk, letterOk, digitOk, specialOk].filter(Boolean).length;
+  const pct   = (score / 4) * 100;
+  bar.style.width      = pct + '%';
+  bar.style.background = score < 2 ? '#ff6b6b' : score < 4 ? '#f59e0b' : '#10a37f';
+}
+
+function setRule(el, ok, okText, failText) {
+  if (!el) return;
+  el.innerText = ok ? okText : failText;
+  el.classList.toggle('ok', ok);
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+}
+
+// ── In-memory fallback store (works even when localStorage is blocked) ──
+const _memStore = {};
+function _lsGet(key) {
+  try { const v = localStorage.getItem(key); return v; } catch { return _memStore[key] || null; }
+}
+function _lsSet(key, val) {
+  try { localStorage.setItem(key, val); } catch { /* ignore */ }
+  _memStore[key] = val;
+}
+function _lsRemove(key) {
+  try { localStorage.removeItem(key); } catch { /* ignore */ }
+  delete _memStore[key];
+}
+
+function getStoredUsers() {
+  try { return JSON.parse(_lsGet('ranai_users') || '{}'); } catch { return {}; }
+}
+function saveStoredUsers(users) {
+  _lsSet('ranai_users', JSON.stringify(users));
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   PERSISTENT MEMORY SYSTEM
+   - saveMessage(role, text)  — saves to per-user memory (max 10 pairs)
+   - loadMemory()             — returns array of {role,text} objects
+   - clearMemory()            — wipes all stored memory for current user
+   - getMemoryKey()           — computes the localStorage key
+   - buildMemoryPrompt()      — formats memory as prompt context string
+═══════════════════════════════════════════════════════════════════════ */
+
+function getMemoryKey() {
+  const email = currentUser ? currentUser.email : 'guest';
+  return 'ranai_memory_' + email;
+}
+
+/**
+ * Load the last 10 conversation pairs from persistent memory.
+ * Returns an array of { role: 'user'|'ai', text: string } objects.
+ */
+function loadMemory() {
+  try {
+    const raw = _lsGet(getMemoryKey());
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(m => m && typeof m.role === 'string' && typeof m.text === 'string');
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Save a single message to persistent memory.
+ * Prevents duplicate consecutive entries. Keeps max 20 entries (10 pairs).
+ */
+function saveMessage(role, text) {
+  if (!text || typeof text !== 'string') return;
+  const cleanText = text.trim();
+  if (!cleanText) return;
+
+  const memory = loadMemory();
+
+  // Prevent duplicate consecutive entry
+  if (memory.length > 0) {
+    const last = memory[memory.length - 1];
+    if (last.role === role && last.text === cleanText) return;
+  }
+
+  memory.push({ role, text: cleanText, ts: Date.now() });
+
+  // Keep only last 20 entries (10 user+ai pairs)
+  const trimmed = memory.slice(-20);
+
+  try {
+    _lsSet(getMemoryKey(), JSON.stringify(trimmed));
+  } catch {
+    // If storage quota exceeded, drop oldest half and retry
+    try {
+      _lsSet(getMemoryKey(), JSON.stringify(trimmed.slice(-10)));
+    } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Clear all memory for the current user.
+ */
+function clearMemory() {
+  _lsRemove(getMemoryKey());
+}
+
+/**
+ * Build a concise memory context string to inject into the AI prompt.
+ * Uses user's name for personalisation if available.
+ */
+function buildMemoryPrompt() {
+  const memory = loadMemory();
+  if (!memory.length) return '';
+
+  const userName = currentUser ? (currentUser.firstName || currentUser.name || '') : '';
+  const nameHint = userName ? `The user's name is ${userName}. ` : '';
+
+  const lines = memory.map(m => {
+    const label = m.role === 'user' ? (userName || 'User') : 'RanAI';
+    return `${label}: ${m.text}`;
+  }).join('\n');
+
+  return `\n\n--- MEMORY (previous conversations) ---\n${nameHint}${lines}\n--- END MEMORY ---`;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   AUTH HANDLERS
+═══════════════════════════════════════════════════════════════════════ */
+function handleLogin() {
+  const email    = ($('loginEmail').value    || '').trim().toLowerCase();
+  const password = ($('loginPassword').value || '');
+  const errEl    = $('loginError');
+
+  errEl.innerText = '';
+
+  if (!email)                { errEl.innerText = 'Please enter your email.';    return; }
+  if (!isValidEmail(email))  { errEl.innerText = 'Please enter a valid email.'; return; }
+  if (!password)             { errEl.innerText = 'Please enter your password.'; return; }
+
+  const users = getStoredUsers();
+  const user  = users[email];
+
+  if (!user)                       { errEl.innerText = 'No account found. Please sign up.'; return; }
+  if (user.password !== password)  { errEl.innerText = 'Incorrect password. Try again.';    return; }
+
+  loginSuccess(user);
+}
+
+function handleSignup() {
+  const firstName = ($('signupFirst').value  || '').trim();
+  const lastName  = ($('signupLast').value   || '').trim();
+  const email     = ($('signupEmail').value  || '').trim().toLowerCase();
+  const password  = ($('signupPassword').value || '');
+  const errEl     = $('signupError');
+
+  errEl.innerText = '';
+
+  if (!firstName)             { errEl.innerText = 'Please enter your first name.';    return; }
+  if (!lastName)              { errEl.innerText = 'Please enter your last name.';     return; }
+  if (!email)                 { errEl.innerText = 'Please enter your email.';         return; }
+  if (!isValidEmail(email))   { errEl.innerText = 'Please enter a valid email.';      return; }
+  if (password.length !== 10) { errEl.innerText = 'Password must be exactly 10 characters.'; return; }
+  if (!/[a-zA-Z]/.test(password)) { errEl.innerText = 'Password must contain at least 1 letter.'; return; }
+  if (!/\d/.test(password))       { errEl.innerText = 'Password must contain at least 1 number.'; return; }
+  if (!/[^a-zA-Z0-9]/.test(password)) { errEl.innerText = 'Password must contain at least 1 special character.'; return; }
+
+  const users = getStoredUsers();
+  if (users[email]) { errEl.innerText = 'An account with this email already exists. Please sign in.'; return; }
+
+  const newUser = {
+    firstName,
+    lastName,
+    name:  firstName + ' ' + lastName,
+    email,
+    password,
+    createdAt: new Date().toISOString()
+  };
+  users[email] = newUser;
+  saveStoredUsers(users);
+
+  loginSuccess(newUser);
+}
+
+function loginSuccess(user) {
+  currentUser = user;
+  _lsSet('ranai_session', JSON.stringify({ email: user.email }));
+
+  // Persist user name in memory profile for context awareness
+  _lsSet('ranai_user_name_' + user.email, user.firstName || user.name || '');
+
+  const authScreen = $('authScreen');
+  authScreen.style.transition = 'opacity 0.4s';
+  authScreen.style.opacity    = '0';
+  setTimeout(() => { authScreen.style.display = 'none'; }, 400);
+
+  const main = $('main');
+  main.style.display = 'flex';
+
+  updateUserUI();
+  loadConversationsFromLocalStorage();
+  initSidebar();
+  initModelDropdown();
+  initUserMenu();
+  initAttachments();
+  initToolBtns();
+  initEventListeners();
+  initConversationEvents();
+
+  showToast('Welcome back, ' + user.firstName + '! 👋');
+}
+
+function checkSavedSession() {
+  try {
+    const session = JSON.parse(_lsGet('ranai_session') || 'null');
+    if (!session || !session.email) return false;
+    const users = getStoredUsers();
+    const user  = users[session.email];
+    if (!user) return false;
+    currentUser = user;
+    return true;
+  } catch { return false; }
+}
+
+function logout() {
+  _lsRemove('ranai_session');
+  currentUser = null;
+  conversations = [];
+  currentConversationId = null;
+
+  $('main').style.display = 'none';
+  const auth = $('authScreen');
+  auth.style.display   = 'flex';
+  auth.style.opacity   = '0';
+  auth.style.transition = 'opacity 0.3s';
+  setTimeout(() => { auth.style.opacity = '1'; }, 10);
+
+  $('loginEmail').value    = '';
+  $('loginPassword').value = '';
+  $('loginError').innerText = '';
+  switchTab('login');
+}
+
+function updateUserUI() {
+  if (!currentUser) return;
+  const displayName = currentUser.name || currentUser.firstName || 'User';
+  const email       = currentUser.email || '';
+  const shortName   = currentUser.firstName || displayName;
+
+  const sidebarName = $('sidebarUserName');
+  if (sidebarName) sidebarName.innerText = shortName;
+
+  const ddName  = $('userDdName');
+  const ddEmail = $('userDdEmail');
+  if (ddName)  ddName.innerText  = displayName;
+  if (ddEmail) ddEmail.innerText = email;
+
+  const letter    = (currentUser.firstName || 'U').charAt(0).toUpperCase();
+  const avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(letter)}&background=10a37f&color=fff`;
+
+  const sidebarAvatar = $('sidebarUserAvatar');
+  if (sidebarAvatar) sidebarAvatar.src = avatarUrl;
+
+  const topbarImg = $('topbarAvatarImg');
+  if (topbarImg) topbarImg.src = avatarUrl;
+
+  const ddAvatar = $('userDdAvatar');
+  if (ddAvatar) ddAvatar.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=10a37f&color=fff&size=80`;
+}
+
+function getCurrentTimeInIndia() {
+  const now = new Date();
+  const ist = new Date(now.getTime() + 5.5*3600000);
+  let h = ist.getUTCHours(), m = ist.getUTCMinutes();
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  return { hours: h % 12 || 12, minutes: String(m).padStart(2,'0'), ampm };
+}
+
+function normaliseHinglish(text) {
+  const map = [
+    [/\bkha\b/g,   'kahan'],
+    [/\bkr\b/g,    'kar'],
+    [/\bkrna\b/g,  'karna'],
+    [/\bkrte\b/g,  'karte'],
+    [/\bkrta\b/g,  'karta'],
+    [/\bbt\b/g,    'baat'],
+    [/\bbtao\b/g,  'batao'],
+    [/\bbtana\b/g, 'batana'],
+    [/\bh\b/g,     'hai'],
+    [/\bhn\b/g,    'hain'],
+    [/\brha\b/g,   'raha'],
+    [/\brhe\b/g,   'rahe'],
+    [/\bthk\b/g,   'theek'],
+    [/\bacha\b/g,  'accha'],
+    [/\bpls\b/g,   'please'],
+    [/\bplz\b/g,   'please'],
+    [/\bkyu\b/g,   'kyun'],
+    [/\bkyun\b/g,  'kyun'],
+    [/\bnhi\b/g,   'nahi'],
+    [/\bnai\b/g,   'nahi'],
+    [/\bhlo\b/g,   'hello'],
+    [/\bhii\b/g,   'hi'],
+    [/\bthx\b/g,   'thanks'],
+    [/\bthnks\b/g, 'thanks'],
+    [/\baap\b/g,   'aap'],
+    [/\bmujhe\b/g, 'mujhe'],
+    [/\bsmjh\b/g,  'samajh'],
+    [/\bsmjha\b/g, 'samjha'],
+  ];
+  let t = text.toLowerCase();
+  for (const [pat, rep] of map) t = t.replace(pat, rep);
+  return t;
+}
+
+function detectLanguage(text) {
+  const t = text.trim();
+  if (/[\u0900-\u097F]/.test(t)) return 'hi';
+  if (/[\u0980-\u09FF]/.test(t)) return 'bn';
+  if (/[\u0B80-\u0BFF]/.test(t)) return 'ta';
+  if (/[\u0C00-\u0C7F]/.test(t)) return 'te';
+  if (/[\u0A80-\u0AFF]/.test(t)) return 'gu';
+  if (/[\u0A00-\u0A7F]/.test(t)) return 'pa';
   if (/\b(namaste|kaise|kya|haal|chal|thik|bahut|mujhe|aap|main|btao|shukriya|dhanyawad|nahi|nhi|kyun|kab|kahan|kha|kaun|mera|tera|hum|tum|bhai|dost|accha|theek|yaar|yar|bol|bolo|kar|karo|kr|krna|hai|hain|tha|thi|the|raha|rahe|ho|hoga|bilkul|zaroor|arrey|arre|abhi|phir|warna|lekin|aur|matlab|samjha|smjh|lagta|lagti|chahiye|chahte|zyada|thoda|bohot|bahut|seedha|sidha|pata|baat|bt)\b/i.test(t))
     return 'hi';
   return 'en';
