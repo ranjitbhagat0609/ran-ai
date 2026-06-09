@@ -3295,4 +3295,1048 @@ async function summarizeUrl(){
       document.getElementById('sumResult').style.display='block';
     } else { document.getElementById('sumResult').innerHTML=`<div style="color:#ff5c7c;text-align:center;padding:16px;">${data.error||'Summarization failed'}</div>`; document.getElementById('sumResult').style.display='block'; }
   } catch(e){ document.getElementById('sumLoading').style.display='none'; document.getElementById('sumResult').innerHTML='<div style="color:#ff5c7c;text-align:center;">Failed. Try again.</div>'; document.getElementById('sumResult').style.display='block'; }
+}/* ═══════════════════════════════════════════════════════════════════════
+   RanAI ULTIMATE PREMIUM UPGRADE — script-premium.js
+   ADD-ON ONLY · Does NOT modify existing code
+   ═══════════════════════════════════════════════════════════════════════ */
+'use strict';
+
+/* ══════════════════════════════════════════════
+   AURORA BACKGROUND
+══════════════════════════════════════════════ */
+(function initAurora() {
+  const canvas = document.getElementById('auroraCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  let W, H, t = 0;
+
+  function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+  resize();
+  window.addEventListener('resize', resize);
+
+  function drawAurora() {
+    ctx.clearRect(0, 0, W, H);
+    t += 0.003;
+
+    const orbs = [
+      { x: 0.2 + 0.15 * Math.sin(t * 0.7), y: 0.3 + 0.1 * Math.cos(t * 0.5), r: W * 0.45, c1: 'rgba(0,232,135,0.12)', c2: 'transparent' },
+      { x: 0.8 + 0.1 * Math.sin(t * 0.9), y: 0.7 + 0.12 * Math.cos(t * 0.6), r: W * 0.4, c1: 'rgba(59,130,246,0.09)', c2: 'transparent' },
+      { x: 0.5 + 0.2 * Math.sin(t * 0.4), y: 0.1 + 0.08 * Math.cos(t * 0.8), r: W * 0.35, c1: 'rgba(168,85,247,0.07)', c2: 'transparent' },
+    ];
+
+    orbs.forEach(o => {
+      const grd = ctx.createRadialGradient(o.x * W, o.y * H, 0, o.x * W, o.y * H, o.r);
+      grd.addColorStop(0, o.c1);
+      grd.addColorStop(1, o.c2);
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.ellipse(o.x * W, o.y * H, o.r, o.r * 0.6, t * 0.2, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    requestAnimationFrame(drawAurora);
+  }
+  drawAurora();
+})();
+
+/* ══════════════════════════════════════════════
+   PREMIUM TOAST (enhanced, non-conflicting)
+══════════════════════════════════════════════ */
+let _premiumToastEl = null;
+let _premiumToastTimer = null;
+
+function showPremiumToast(msg, duration) {
+  duration = duration || 2400;
+  if (!_premiumToastEl) {
+    _premiumToastEl = document.createElement('div');
+    _premiumToastEl.className = 'ranai-toast-premium';
+    _premiumToastEl.innerHTML = '<div class="toast-dot"></div><span class="toast-msg"></span>';
+    document.body.appendChild(_premiumToastEl);
+  }
+  _premiumToastEl.querySelector('.toast-msg').textContent = msg;
+  clearTimeout(_premiumToastTimer);
+  _premiumToastEl.classList.add('show');
+  _premiumToastTimer = setTimeout(() => {
+    if (_premiumToastEl) _premiumToastEl.classList.remove('show');
+  }, duration);
 }
+
+/* ══════════════════════════════════════════════
+   EXTENDED MODEL DEFINITIONS
+══════════════════════════════════════════════ */
+const PREMIUM_MODELS = [
+  { id: 'RanAI 4o',       icon: '🟢', color: '#10a37f',                          desc: 'Great for most tasks',    badge: 'new',  group: 'RanAI' },
+  { id: 'RanAI o1',       icon: '🟣', color: '#8e44ef',                          desc: 'Advanced reasoning',       badge: null,   group: 'RanAI' },
+  { id: 'RanAI o3',       icon: '🔴', color: '#e67e22',                          desc: 'Most capable · Pro only',  badge: 'pro',  group: 'RanAI' },
+  { id: 'Gemini 2.5 Pro', icon: '🔵', color: 'linear-gradient(135deg,#4285f4,#34a853)', desc: 'Google · Multimodal', badge: 'pro', group: 'Google' },
+  { id: 'Gemini Flash',   icon: '⚡', color: '#f59e0b',                          desc: 'Google · Ultra fast',     badge: 'fast', group: 'Google' },
+  { id: 'GPT-4o',         icon: '🤖', color: '#10a37f',                          desc: 'OpenAI · GPT flagship',   badge: null,   group: 'OpenAI' },
+  { id: 'DeepSeek Chat',  icon: '🌊', color: '#7c3aed',                          desc: 'DeepSeek · Deep reasoning',badge: null,  group: 'DeepSeek' },
+  { id: 'DeepSeek Reasoner', icon: '🧠', color: '#4f46e5',                       desc: 'DeepSeek · Chain-of-thought',badge: 'pro',group: 'DeepSeek' },
+];
+
+/* Replace the existing model dropdown content with extended models */
+function buildPremiumModelDropdown() {
+  const dropdown = document.getElementById('modelDropdown');
+  if (!dropdown) return;
+
+  const groups = [...new Set(PREMIUM_MODELS.map(m => m.group))];
+  let html = '';
+  groups.forEach(group => {
+    html += `<div class="model-option-group-label">${group}</div>`;
+    PREMIUM_MODELS.filter(m => m.group === group).forEach(m => {
+      const isActive = m.id === currentModel;
+      const colorStyle = m.color.includes('gradient') ? `background:${m.color};` : `background:${m.color};`;
+      const badgeHtml = m.badge
+        ? `<span class="model-badge-premium model-badge-${m.badge}">${m.badge.toUpperCase()}</span>`
+        : '';
+      html += `
+        <button class="model-option model-option-premium${isActive ? ' active' : ''}" data-model="${m.id}">
+          <div class="model-left">
+            <div class="model-color-dot" style="${colorStyle}"></div>
+            <div>
+              <div class="model-opt-name">${m.id} ${badgeHtml}</div>
+              <div class="model-opt-desc">${m.desc}</div>
+            </div>
+          </div>
+          ${isActive ? '<svg class="check-ico" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="20 6 9 17 4 12"/></svg>' : ''}
+        </button>`;
+    });
+  });
+  dropdown.innerHTML = html;
+
+  // Re-bind model click events
+  dropdown.querySelectorAll('.model-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const newModel = btn.dataset.model;
+      if (newModel === currentModel) { closeAllDropdowns(); return; }
+      currentModel = newModel;
+      updateModelPillPremium(newModel);
+      buildPremiumModelDropdown();
+      savePreferredModel(newModel);
+      closeAllDropdowns();
+      showPremiumToast('Model: ' + newModel, 1800);
+    });
+  });
+}
+
+function updateModelPillPremium(modelId) {
+  const pill = document.getElementById('modelPill');
+  if (!pill) return;
+  const m = PREMIUM_MODELS.find(x => x.id === modelId) || PREMIUM_MODELS[0];
+  const colorStyle = m.color.includes('gradient') ? '' : `background:${m.color}`;
+  pill.innerHTML = `
+    <span class="model-dot" style="${colorStyle || 'background:' + m.color}"></span>
+    <span>${m.id}</span>
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="6 9 12 15 18 9"/></svg>
+  `;
+  pill.classList.add('switching');
+  setTimeout(() => pill.classList.remove('switching'), 400);
+}
+
+function savePreferredModel(modelId) {
+  try { localStorage.setItem('ranai_preferred_model', modelId); } catch(e) {}
+}
+
+function loadPreferredModel() {
+  try {
+    const saved = localStorage.getItem('ranai_preferred_model');
+    if (saved && PREMIUM_MODELS.find(m => m.id === saved)) {
+      currentModel = saved;
+      updateModelPillPremium(saved);
+    }
+  } catch(e) {}
+}
+
+/* ══════════════════════════════════════════════
+   PROFILE PAGE
+══════════════════════════════════════════════ */
+function openProfilePage() {
+  const overlay = document.getElementById('profileOverlay');
+  if (!overlay) return;
+  populateProfilePage();
+  overlay.classList.add('open');
+  closeAllDropdowns();
+  document.body.style.overflow = 'hidden';
+}
+
+function closeProfilePage() {
+  const overlay = document.getElementById('profileOverlay');
+  if (!overlay) return;
+  overlay.classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function populateProfilePage() {
+  if (!window.currentUser) return;
+  const u = window.currentUser;
+
+  // Name & email
+  const el = (id) => document.getElementById(id);
+  if (el('profileDisplayName')) el('profileDisplayName').textContent = u.name || (u.firstName + ' ' + u.lastName) || 'User';
+  if (el('profileEmailLine')) el('profileEmailLine').textContent = u.email || '';
+  if (el('profileJoinDate')) {
+    const date = u.createdAt ? new Date(u.createdAt).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' }) : '—';
+    el('profileJoinDate').textContent = 'Member since ' + date;
+  }
+
+  // Form fields
+  if (el('profileFirstName')) el('profileFirstName').value = u.firstName || '';
+  if (el('profileLastName')) el('profileLastName').value = u.lastName || '';
+  if (el('profileEmailField')) el('profileEmailField').value = u.email || '';
+
+  // Stats
+  const allChats = getProfileStats();
+  if (el('profileStatChats')) el('profileStatChats').textContent = allChats.totalChats;
+  if (el('profileStatMessages')) el('profileStatMessages').textContent = allChats.totalMessages;
+  if (el('profileStatDays')) el('profileStatDays').textContent = allChats.daysActive;
+
+  // Avatar
+  const savedAvatar = loadProfileAvatar();
+  if (savedAvatar && el('profileAvatarImg')) {
+    el('profileAvatarImg').src = savedAvatar;
+  } else if (el('profileAvatarImg')) {
+    const displayName = u.name || u.firstName || 'U';
+    el('profileAvatarImg').src = `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=10a37f&color=fff&size=200`;
+  }
+
+  // Preferred model
+  if (el('profilePrefModel')) {
+    el('profilePrefModel').value = currentModel || 'RanAI 4o';
+  }
+}
+
+function getProfileStats() {
+  let totalChats = 0, totalMessages = 0, daysActive = 0;
+  try {
+    const convRaw = localStorage.getItem('ranai_conversations_' + (window.currentUser?.email || ''));
+    if (convRaw) {
+      const convs = JSON.parse(convRaw);
+      if (Array.isArray(convs)) {
+        totalChats = convs.length;
+        totalMessages = convs.reduce((sum, c) => sum + (c.messages ? c.messages.length : 0), 0);
+        const dates = new Set(convs.map(c => c.createdAt ? c.createdAt.slice(0,10) : null).filter(Boolean));
+        daysActive = dates.size;
+      }
+    }
+  } catch(e) {}
+  return { totalChats, totalMessages, daysActive };
+}
+
+function loadProfileAvatar() {
+  try {
+    const email = window.currentUser?.email || '';
+    return localStorage.getItem('ranai_avatar_' + email) || null;
+  } catch(e) { return null; }
+}
+
+function saveProfileAvatar(dataUrl) {
+  try {
+    const email = window.currentUser?.email || '';
+    localStorage.setItem('ranai_avatar_' + email, dataUrl);
+  } catch(e) {}
+}
+
+function handleAvatarUpload(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const dataUrl = e.target.result;
+    saveProfileAvatar(dataUrl);
+    const img = document.getElementById('profileAvatarImg');
+    if (img) img.src = dataUrl;
+    // Also update sidebar + topbar avatars
+    const sidebarAvatar = document.getElementById('sidebarUserAvatar');
+    const topbarImg = document.getElementById('topbarAvatarImg');
+    const ddAvatar = document.getElementById('userDdAvatar');
+    if (sidebarAvatar) sidebarAvatar.src = dataUrl;
+    if (topbarImg) topbarImg.src = dataUrl;
+    if (ddAvatar) ddAvatar.src = dataUrl;
+    showPremiumToast('Profile picture updated ✓');
+  };
+  reader.readAsDataURL(file);
+}
+
+function saveProfile() {
+  if (!window.currentUser) return;
+  const firstName = (document.getElementById('profileFirstName')?.value || '').trim();
+  const lastName  = (document.getElementById('profileLastName')?.value || '').trim();
+  const prefModel = document.getElementById('profilePrefModel')?.value;
+
+  if (!firstName || !lastName) { showPremiumToast('Please fill in your name'); return; }
+
+  window.currentUser.firstName = firstName;
+  window.currentUser.lastName  = lastName;
+  window.currentUser.name      = firstName + ' ' + lastName;
+  if (prefModel) currentModel = prefModel;
+
+  // Persist
+  try {
+    const users = JSON.parse(localStorage.getItem('ranai_users') || '{}');
+    if (users[window.currentUser.email]) {
+      users[window.currentUser.email].firstName = firstName;
+      users[window.currentUser.email].lastName  = lastName;
+      users[window.currentUser.email].name      = firstName + ' ' + lastName;
+      localStorage.setItem('ranai_users', JSON.stringify(users));
+    }
+  } catch(e) {}
+
+  if (prefModel) savePreferredModel(prefModel);
+  updateProfileUI();
+  showPremiumToast('Profile saved ✓');
+}
+
+function updateProfileUI() {
+  if (!window.currentUser) return;
+  const displayName = window.currentUser.name || window.currentUser.firstName || 'User';
+  const el = document.getElementById('profileDisplayName');
+  if (el) el.textContent = displayName;
+  // Also update sidebar name
+  const sidebarName = document.getElementById('sidebarUserName');
+  if (sidebarName) sidebarName.textContent = window.currentUser.firstName || displayName;
+  const ddName = document.getElementById('userDdName');
+  if (ddName) ddName.textContent = displayName;
+}
+
+function exportProfileData() {
+  if (!window.currentUser) return;
+  const data = {
+    user: { ...window.currentUser, password: '***' },
+    stats: getProfileStats(),
+    preferredModel: currentModel,
+    exportedAt: new Date().toISOString()
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'ranai-profile.json'; a.click();
+  URL.revokeObjectURL(url);
+  showPremiumToast('Profile data exported ✓');
+}
+
+/* ══════════════════════════════════════════════
+   SETTINGS PAGE
+══════════════════════════════════════════════ */
+function openSettingsPage() {
+  const overlay = document.getElementById('settingsOverlay');
+  if (!overlay) return;
+  loadSettingsValues();
+  overlay.classList.add('open');
+  closeAllDropdowns();
+  document.body.style.overflow = 'hidden';
+}
+
+function closeSettingsPage() {
+  const overlay = document.getElementById('settingsOverlay');
+  if (!overlay) return;
+  overlay.classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function switchSettingsTab(tabName) {
+  document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.settings-panel').forEach(p => p.classList.remove('active'));
+  const activeTab = document.querySelector(`.settings-tab[data-tab="${tabName}"]`);
+  const activePanel = document.getElementById(`settingsPanel_${tabName}`);
+  if (activeTab) activeTab.classList.add('active');
+  if (activePanel) activePanel.classList.add('active');
+}
+
+const SETTINGS_DEFAULTS = {
+  notifications: true,
+  soundEffects: false,
+  autoTitle: true,
+  memoryEnabled: true,
+  voiceAutoPlay: false,
+  streamResponse: true,
+  defaultModel: 'RanAI 4o',
+  language: 'en',
+  fontSize: 'medium',
+  sendOnEnter: true,
+  dataCollection: false,
+};
+
+function loadSettingsValues() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('ranai_settings') || '{}');
+    const settings = { ...SETTINGS_DEFAULTS, ...saved };
+    Object.entries(settings).forEach(([key, val]) => {
+      const el = document.getElementById('setting_' + key);
+      if (!el) return;
+      if (el.type === 'checkbox') el.checked = !!val;
+      else el.value = val;
+    });
+  } catch(e) {}
+}
+
+function saveSettings() {
+  const settings = {};
+  const keys = Object.keys(SETTINGS_DEFAULTS);
+  keys.forEach(key => {
+    const el = document.getElementById('setting_' + key);
+    if (!el) return;
+    settings[key] = el.type === 'checkbox' ? el.checked : el.value;
+  });
+  try { localStorage.setItem('ranai_settings', JSON.stringify(settings)); } catch(e) {}
+  applySettings(settings);
+  showPremiumToast('Settings saved ✓');
+}
+
+function applySettings(settings) {
+  // Font size
+  const fontMap = { small: '13px', medium: '14px', large: '15.5px' };
+  if (settings.fontSize && fontMap[settings.fontSize]) {
+    document.body.style.fontSize = fontMap[settings.fontSize];
+  }
+  // Default model
+  if (settings.defaultModel && PREMIUM_MODELS.find(m => m.id === settings.defaultModel)) {
+    currentModel = settings.defaultModel;
+    updateModelPillPremium(currentModel);
+    buildPremiumModelDropdown();
+  }
+}
+
+/* ══════════════════════════════════════════════
+   ENHANCED EXPORT: PDF/TXT/JSON (client-side)
+══════════════════════════════════════════════ */
+function exportChatPremium(format, scope) {
+  scope = scope || 'current';
+  const messages = getChatMessagesForExport(scope);
+  if (!messages.length) { showPremiumToast('No messages to export'); return; }
+
+  if (format === 'json') exportAsJSON(messages, scope);
+  else if (format === 'txt') exportAsTXT(messages, scope);
+  else if (format === 'pdf') exportAsPDF(messages, scope);
+  else if (format === 'md') exportAsMD(messages, scope);
+}
+
+function getChatMessagesForExport(scope) {
+  if (scope === 'current') {
+    const els = document.querySelectorAll('.chat-messages [data-role]');
+    if (els.length) return Array.from(els).map(el => ({ role: el.dataset.role, content: el.innerText.trim() }));
+  }
+  // All chats
+  try {
+    const email = window.currentUser?.email || '';
+    const raw = localStorage.getItem('ranai_conversations_' + email);
+    if (!raw) return [];
+    const convs = JSON.parse(raw);
+    if (!Array.isArray(convs)) return [];
+    return convs.flatMap(c => (c.messages || []).map(m => ({ role: m.role, content: m.text || m.content || '' })));
+  } catch(e) { return []; }
+}
+
+function exportAsJSON(messages, scope) {
+  const obj = {
+    app: 'RanAI',
+    user: window.currentUser?.name || 'User',
+    scope,
+    exportedAt: new Date().toISOString(),
+    messages,
+  };
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+  triggerDownload(blob, `ranai-chat-${scope}.json`);
+  showPremiumToast('Exported as JSON ✓');
+}
+
+function exportAsTXT(messages, scope) {
+  const userName = window.currentUser?.name || 'User';
+  let content = `RanAI Chat Export\nUser: ${userName}\nDate: ${new Date().toLocaleString()}\nScope: ${scope}\n${'─'.repeat(50)}\n\n`;
+  messages.forEach(m => {
+    const label = m.role === 'user' ? userName : 'RanAI';
+    content += `[${label}]\n${m.content}\n\n`;
+  });
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  triggerDownload(blob, `ranai-chat-${scope}.txt`);
+  showPremiumToast('Exported as TXT ✓');
+}
+
+function exportAsMD(messages, scope) {
+  const userName = window.currentUser?.name || 'User';
+  let content = `# RanAI Chat Export\n\n**User:** ${userName}  \n**Date:** ${new Date().toLocaleString()}  \n**Scope:** ${scope}\n\n---\n\n`;
+  messages.forEach(m => {
+    const label = m.role === 'user' ? `**${userName}**` : '**RanAI 🤖**';
+    content += `${label}\n\n${m.content}\n\n---\n\n`;
+  });
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+  triggerDownload(blob, `ranai-chat-${scope}.md`);
+  showPremiumToast('Exported as Markdown ✓');
+}
+
+function exportAsPDF(messages, scope) {
+  // Pure browser PDF using print-to-PDF trick with a styled page
+  const userName = window.currentUser?.name || 'User';
+  const dateStr = new Date().toLocaleString();
+  let rows = '';
+  messages.forEach(m => {
+    const isUser = m.role === 'user';
+    const label = isUser ? userName : 'RanAI';
+    const color = isUser ? '#00e887' : '#3b82f6';
+    const bg = isUser ? 'rgba(0,232,135,0.06)' : 'rgba(59,130,246,0.06)';
+    const escaped = (m.content || '').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+    rows += `
+      <div style="margin-bottom:16px;padding:14px 18px;border-radius:12px;background:${bg};border:1px solid ${color}22;">
+        <div style="font-size:11px;font-weight:700;color:${color};letter-spacing:0.06em;text-transform:uppercase;margin-bottom:8px;">${label}</div>
+        <div style="font-size:14px;color:#1a2030;line-height:1.7;">${escaped}</div>
+      </div>`;
+  });
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <title>RanAI Chat Export</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 720px; margin: 0 auto; padding: 40px 24px; background: #fff; }
+    .header { display: flex; align-items: center; gap: 16px; margin-bottom: 32px; padding-bottom: 20px; border-bottom: 2px solid #00e887; }
+    .header-logo { width: 48px; height: 48px; background: linear-gradient(135deg,#00e887,#3b82f6); border-radius: 12px; display:flex;align-items:center;justify-content:center;font-size:24px; }
+    .header-title { font-size: 22px; font-weight: 700; color: #0f1114; }
+    .header-meta { font-size: 13px; color: #6b7280; margin-top: 3px; }
+    @media print { body { padding: 20px; } }
+  </style></head>
+  <body>
+    <div class="header">
+      <div class="header-logo">🤖</div>
+      <div><div class="header-title">RanAI Chat Export</div><div class="header-meta">User: ${userName} &nbsp;·&nbsp; ${dateStr} &nbsp;·&nbsp; ${messages.length} messages</div></div>
+    </div>
+    ${rows}
+  </body></html>`;
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const win = window.open(url, '_blank');
+  if (win) {
+    win.onload = () => { win.print(); URL.revokeObjectURL(url); };
+  } else {
+    triggerDownload(blob, `ranai-chat-${scope}.html`);
+  }
+  showPremiumToast('PDF export opened — use Print → Save as PDF ✓');
+}
+
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ══════════════════════════════════════════════
+   ENHANCED SIDEBAR: PINS + FAVORITES
+══════════════════════════════════════════════ */
+function getPinnedChats() {
+  try { return JSON.parse(localStorage.getItem('ranai_pinned_' + (window.currentUser?.email || '')) || '[]'); } catch(e) { return []; }
+}
+function savePinnedChats(arr) {
+  try { localStorage.setItem('ranai_pinned_' + (window.currentUser?.email || ''), JSON.stringify(arr)); } catch(e) {}
+}
+function getFavoriteChats() {
+  try { return JSON.parse(localStorage.getItem('ranai_favorites_' + (window.currentUser?.email || '')) || '[]'); } catch(e) { return []; }
+}
+function saveFavoriteChats(arr) {
+  try { localStorage.setItem('ranai_favorites_' + (window.currentUser?.email || ''), JSON.stringify(arr)); } catch(e) {}
+}
+
+function togglePinChat(convId) {
+  const pins = getPinnedChats();
+  const idx = pins.indexOf(convId);
+  if (idx >= 0) { pins.splice(idx, 1); showPremiumToast('Chat unpinned'); }
+  else { pins.unshift(convId); showPremiumToast('Chat pinned 📌'); }
+  savePinnedChats(pins);
+  renderSidebarPremiumLabels();
+}
+
+function toggleFavoriteChat(convId) {
+  const favs = getFavoriteChats();
+  const idx = favs.indexOf(convId);
+  if (idx >= 0) { favs.splice(idx, 1); showPremiumToast('Removed from favorites'); }
+  else { favs.unshift(convId); showPremiumToast('Added to favorites ⭐'); }
+  saveFavoriteChats(favs);
+  renderSidebarPremiumLabels();
+}
+
+function renderSidebarPremiumLabels() {
+  const pins = getPinnedChats();
+  const favs = getFavoriteChats();
+
+  document.querySelectorAll('.conv-item').forEach(item => {
+    const convId = item.dataset.id;
+    if (!convId) return;
+
+    // Pin indicator
+    let pinEl = item.querySelector('.conv-pin-ico');
+    if (pins.includes(convId)) {
+      if (!pinEl) {
+        pinEl = document.createElement('span');
+        pinEl.className = 'conv-pin-ico';
+        pinEl.style.cssText = 'position:absolute;right:30px;top:50%;transform:translateY(-50%);font-size:11px;pointer-events:none;';
+        pinEl.textContent = '📌';
+        item.style.position = 'relative';
+        item.appendChild(pinEl);
+      }
+    } else {
+      if (pinEl) pinEl.remove();
+    }
+
+    // Star indicator
+    let starEl = item.querySelector('.conv-star-ico');
+    if (favs.includes(convId)) {
+      if (!starEl) {
+        starEl = document.createElement('span');
+        starEl.className = 'conv-star-ico';
+        starEl.style.cssText = 'position:absolute;right:44px;top:50%;transform:translateY(-50%);font-size:11px;pointer-events:none;';
+        starEl.textContent = '⭐';
+        item.style.position = 'relative';
+        item.appendChild(starEl);
+      }
+    } else {
+      if (starEl) starEl.remove();
+    }
+
+    // Inject action buttons if not present
+    if (!item.querySelector('.conv-actions-premium')) {
+      const actions = document.createElement('div');
+      actions.className = 'conv-actions-premium';
+      actions.innerHTML = `
+        <button class="conv-action-btn pin-btn" title="Pin/Unpin">📌</button>
+        <button class="conv-action-btn star-btn" title="Favorite">⭐</button>
+      `;
+      item.style.position = 'relative';
+      item.appendChild(actions);
+
+      actions.querySelector('.pin-btn').addEventListener('click', (e) => { e.stopPropagation(); togglePinChat(convId); });
+      actions.querySelector('.star-btn').addEventListener('click', (e) => { e.stopPropagation(); toggleFavoriteChat(convId); });
+    }
+  });
+}
+
+/* ══════════════════════════════════════════════
+   CLOSE ALL DROPDOWNS HELPER (safe extension)
+══════════════════════════════════════════════ */
+function closeAllDropdowns() {
+  // Close existing dropdowns if function exists
+  document.querySelectorAll('.dropdown-panel').forEach(el => el.classList.remove('open'));
+}
+
+/* ══════════════════════════════════════════════
+   INIT PREMIUM FEATURES (called on login)
+══════════════════════════════════════════════ */
+function initPremiumFeatures() {
+  // Load preferred model
+  loadPreferredModel();
+
+  // Rebuild model dropdown with extended models
+  buildPremiumModelDropdown();
+
+  // Load settings and apply
+  try {
+    const settings = JSON.parse(localStorage.getItem('ranai_settings') || '{}');
+    applySettings({ ...SETTINGS_DEFAULTS, ...settings });
+  } catch(e) {}
+
+  // Apply saved avatar
+  const savedAvatar = loadProfileAvatar();
+  if (savedAvatar) {
+    const sidebarAvatar = document.getElementById('sidebarUserAvatar');
+    const topbarImg = document.getElementById('topbarAvatarImg');
+    const ddAvatar = document.getElementById('userDdAvatar');
+    if (sidebarAvatar) sidebarAvatar.src = savedAvatar;
+    if (topbarImg) topbarImg.src = savedAvatar;
+    if (ddAvatar) ddAvatar.src = savedAvatar;
+  }
+
+  // Bind profile menu item
+  const profileMenuItem = document.getElementById('profileMenuItem');
+  if (profileMenuItem) {
+    profileMenuItem.addEventListener('click', () => openProfilePage());
+  }
+
+  // Bind settings menu item
+  const settingsMenuItem = document.getElementById('settingsMenuItem');
+  if (settingsMenuItem) {
+    settingsMenuItem.addEventListener('click', () => openSettingsPage());
+  }
+
+  // Render sidebar premium labels after a short delay
+  setTimeout(renderSidebarPremiumLabels, 500);
+
+  // Observe sidebar changes to apply labels to new items
+  const convList = document.getElementById('convList');
+  if (convList) {
+    const observer = new MutationObserver(() => setTimeout(renderSidebarPremiumLabels, 100));
+    observer.observe(convList, { childList: true, subtree: true });
+  }
+}
+
+/* ══════════════════════════════════════════════
+   HOOK INTO LOGIN SUCCESS
+  (appended to existing loginSuccess via event)
+══════════════════════════════════════════════ */
+// We hook by patching document to fire after existing init
+(function hookPremiumInit() {
+  // Wait for DOM ready + existing scripts to run
+  const tryInit = () => {
+    // If currentUser exists and main is visible, init premium
+    if (window.currentUser && document.getElementById('main')?.style.display !== 'none') {
+      initPremiumFeatures();
+    }
+  };
+
+  // Watch for auth state via MutationObserver on #main
+  const main = document.getElementById('main');
+  if (main) {
+    const obs = new MutationObserver((mutations) => {
+      mutations.forEach(m => {
+        if (m.type === 'attributes' && m.attributeName === 'style') {
+          if (main.style.display !== 'none') {
+            setTimeout(initPremiumFeatures, 200);
+          }
+        }
+      });
+    });
+    obs.observe(main, { attributes: true });
+  }
+})();
+
+/* ══════════════════════════════════════════════
+   PROFILE PAGE HTML (injected dynamically)
+══════════════════════════════════════════════ */
+(function injectProfileModal() {
+  if (document.getElementById('profileOverlay')) return;
+  const modelOptions = PREMIUM_MODELS.map(m => `<option value="${m.id}">${m.id}</option>`).join('');
+  const html = `
+  <div id="profileOverlay">
+    <div id="profileModal">
+
+      <!-- Banner -->
+      <div class="profile-banner">
+        <div class="profile-banner-shimmer"></div>
+      </div>
+
+      <!-- Avatar + actions -->
+      <div class="profile-avatar-section">
+        <div class="profile-avatar-wrap">
+          <div class="profile-avatar-ring"></div>
+          <div class="profile-avatar-inner"></div>
+          <img id="profileAvatarImg" src="" alt="Avatar" onclick="document.getElementById('profileAvatarInput').click()" />
+          <label class="profile-avatar-upload-btn" for="profileAvatarInput" title="Change photo">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          </label>
+          <input type="file" id="profileAvatarInput" accept="image/*" style="display:none" />
+        </div>
+        <div class="profile-header-actions">
+          <button class="profile-close-btn" onclick="closeProfilePage()">✕</button>
+        </div>
+      </div>
+
+      <div class="profile-body">
+
+        <!-- Name + email -->
+        <div class="profile-name-area">
+          <div class="profile-display-name" id="profileDisplayName">User</div>
+          <div class="profile-email-line" id="profileEmailLine">user@email.com</div>
+          <div class="profile-join-date" id="profileJoinDate"></div>
+        </div>
+
+        <!-- Stats -->
+        <div class="profile-stats-grid">
+          <div class="profile-stat-card">
+            <div class="profile-stat-icon">💬</div>
+            <div class="profile-stat-val" id="profileStatChats">0</div>
+            <div class="profile-stat-label">Total Chats</div>
+          </div>
+          <div class="profile-stat-card">
+            <div class="profile-stat-icon">📝</div>
+            <div class="profile-stat-val" id="profileStatMessages">0</div>
+            <div class="profile-stat-label">Messages</div>
+          </div>
+          <div class="profile-stat-card">
+            <div class="profile-stat-icon">📅</div>
+            <div class="profile-stat-val" id="profileStatDays">0</div>
+            <div class="profile-stat-label">Days Active</div>
+          </div>
+        </div>
+
+        <!-- Edit form -->
+        <div class="profile-section-title">Edit Profile</div>
+        <div class="profile-form-grid">
+          <div class="profile-field-group">
+            <label class="profile-label">First Name</label>
+            <input type="text" id="profileFirstName" class="profile-input" placeholder="First name" />
+          </div>
+          <div class="profile-field-group">
+            <label class="profile-label">Last Name</label>
+            <input type="text" id="profileLastName" class="profile-input" placeholder="Last name" />
+          </div>
+          <div class="profile-field-group full">
+            <label class="profile-label">Email Address</label>
+            <input type="email" id="profileEmailField" class="profile-input" placeholder="Email" disabled />
+          </div>
+          <div class="profile-field-group full">
+            <label class="profile-label">Preferred AI Model</label>
+            <select id="profilePrefModel" class="profile-select">${modelOptions}</select>
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="profile-actions">
+          <button class="profile-btn profile-btn-primary" onclick="saveProfile()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            Save Profile
+          </button>
+          <button class="profile-btn profile-btn-sec" onclick="exportProfileData()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export Data
+          </button>
+          <button class="profile-btn profile-btn-danger" onclick="typeof logout==='function'&&logout();closeProfilePage();">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+            Log Out
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+
+  document.body.insertAdjacentHTML('beforeend', html);
+
+  // Bind avatar upload
+  const avatarInput = document.getElementById('profileAvatarInput');
+  if (avatarInput) {
+    avatarInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) handleAvatarUpload(file);
+    });
+  }
+
+  // Close on overlay click
+  const overlay = document.getElementById('profileOverlay');
+  if (overlay) {
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeProfilePage();
+    });
+  }
+})();
+
+/* ══════════════════════════════════════════════
+   SETTINGS MODAL HTML (injected dynamically)
+══════════════════════════════════════════════ */
+(function injectSettingsModal() {
+  if (document.getElementById('settingsOverlay')) return;
+  const modelOptions = PREMIUM_MODELS.map(m => `<option value="${m.id}">${m.id}</option>`).join('');
+  const html = `
+  <div id="settingsOverlay">
+    <div id="settingsModal">
+      <!-- Header -->
+      <div class="settings-header">
+        <div class="settings-header-icon">⚙️</div>
+        <div>
+          <div class="settings-title">Settings</div>
+          <div class="settings-sub">Customize your RanAI experience</div>
+        </div>
+        <button class="profile-close-btn" style="margin-left:auto" onclick="closeSettingsPage()">✕</button>
+      </div>
+
+      <!-- Tabs -->
+      <div class="settings-tabs">
+        <button class="settings-tab active" data-tab="chat" onclick="switchSettingsTab('chat')">💬 Chat</button>
+        <button class="settings-tab" data-tab="ai" onclick="switchSettingsTab('ai')">🤖 AI Model</button>
+        <button class="settings-tab" data-tab="voice" onclick="switchSettingsTab('voice')">🎙️ Voice</button>
+        <button class="settings-tab" data-tab="notifications" onclick="switchSettingsTab('notifications')">🔔 Notifications</button>
+        <button class="settings-tab" data-tab="data" onclick="switchSettingsTab('data')">🔒 Privacy</button>
+      </div>
+
+      <div class="settings-body">
+
+        <!-- Chat panel -->
+        <div class="settings-panel active" id="settingsPanel_chat">
+          <div class="settings-row">
+            <div class="settings-row-left">
+              <div class="settings-row-title">Send on Enter</div>
+              <div class="settings-row-desc">Press Enter to send messages. Shift+Enter for new line.</div>
+            </div>
+            <label class="toggle-switch"><input type="checkbox" id="setting_sendOnEnter" /><span class="toggle-slider"></span></label>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-left">
+              <div class="settings-row-title">Auto-name Chats</div>
+              <div class="settings-row-desc">Automatically generate titles for new conversations.</div>
+            </div>
+            <label class="toggle-switch"><input type="checkbox" id="setting_autoTitle" /><span class="toggle-slider"></span></label>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-left">
+              <div class="settings-row-title">Memory System</div>
+              <div class="settings-row-desc">Remember context from previous conversations.</div>
+            </div>
+            <label class="toggle-switch"><input type="checkbox" id="setting_memoryEnabled" /><span class="toggle-slider"></span></label>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-left">
+              <div class="settings-row-title">Stream Responses</div>
+              <div class="settings-row-desc">Show AI typing animation as response arrives.</div>
+            </div>
+            <label class="toggle-switch"><input type="checkbox" id="setting_streamResponse" /><span class="toggle-slider"></span></label>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-left">
+              <div class="settings-row-title">Font Size</div>
+              <div class="settings-row-desc">Adjust the chat text size.</div>
+            </div>
+            <select class="settings-select" id="setting_fontSize">
+              <option value="small">Small</option>
+              <option value="medium" selected>Medium</option>
+              <option value="large">Large</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- AI Model panel -->
+        <div class="settings-panel" id="settingsPanel_ai">
+          <div class="settings-row">
+            <div class="settings-row-left">
+              <div class="settings-row-title">Default Model</div>
+              <div class="settings-row-desc">Model used for new conversations.</div>
+            </div>
+            <select class="settings-select" id="setting_defaultModel">${modelOptions}</select>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-left">
+              <div class="settings-row-title">Response Language</div>
+              <div class="settings-row-desc">Preferred language for AI responses.</div>
+            </div>
+            <select class="settings-select" id="setting_language">
+              <option value="en">English</option>
+              <option value="hi">Hindi</option>
+              <option value="auto">Auto-detect</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Voice panel -->
+        <div class="settings-panel" id="settingsPanel_voice">
+          <div class="settings-row">
+            <div class="settings-row-left">
+              <div class="settings-row-title">Auto-play Responses</div>
+              <div class="settings-row-desc">Automatically speak AI responses aloud.</div>
+            </div>
+            <label class="toggle-switch"><input type="checkbox" id="setting_voiceAutoPlay" /><span class="toggle-slider"></span></label>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-left">
+              <div class="settings-row-title">Sound Effects</div>
+              <div class="settings-row-desc">Play subtle sound on message send/receive.</div>
+            </div>
+            <label class="toggle-switch"><input type="checkbox" id="setting_soundEffects" /><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+
+        <!-- Notifications panel -->
+        <div class="settings-panel" id="settingsPanel_notifications">
+          <div class="settings-row">
+            <div class="settings-row-left">
+              <div class="settings-row-title">Browser Notifications</div>
+              <div class="settings-row-desc">Show desktop notifications for long tasks.</div>
+            </div>
+            <label class="toggle-switch"><input type="checkbox" id="setting_notifications" /><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+
+        <!-- Data/Privacy panel -->
+        <div class="settings-panel" id="settingsPanel_data">
+          <div class="settings-row">
+            <div class="settings-row-left">
+              <div class="settings-row-title">Analytics</div>
+              <div class="settings-row-desc">Help improve RanAI with anonymous usage data.</div>
+            </div>
+            <label class="toggle-switch"><input type="checkbox" id="setting_dataCollection" /><span class="toggle-slider"></span></label>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-left">
+              <div class="settings-row-title">Export All Data</div>
+              <div class="settings-row-desc">Download all your chats and profile data.</div>
+            </div>
+            <button class="profile-btn profile-btn-sec" style="padding:8px 16px;font-size:12.5px;" onclick="exportChatPremium('json','all')">Export JSON</button>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-left">
+              <div class="settings-row-title">Clear All Chats</div>
+              <div class="settings-row-desc">Permanently delete all conversations from this device.</div>
+            </div>
+            <button class="profile-btn profile-btn-danger" style="padding:8px 16px;font-size:12.5px;" onclick="if(confirm('Delete ALL chats? This cannot be undone.')){clearAllChatsData();closeSettingsPage();}">Clear</button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Save area -->
+      <div class="settings-save-area">
+        <button class="profile-btn profile-btn-sec" onclick="closeSettingsPage()">Cancel</button>
+        <button class="profile-btn profile-btn-primary" onclick="saveSettings()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+          Save Settings
+        </button>
+      </div>
+    </div>
+  </div>`;
+
+  document.body.insertAdjacentHTML('beforeend', html);
+
+  const overlay = document.getElementById('settingsOverlay');
+  if (overlay) {
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeSettingsPage();
+    });
+  }
+})();
+
+function clearAllChatsData() {
+  try {
+    const email = window.currentUser?.email || '';
+    localStorage.removeItem('ranai_conversations_' + email);
+    if (typeof window.conversations !== 'undefined') window.conversations = [];
+    const convList = document.getElementById('convList');
+    if (convList) convList.innerHTML = '';
+    showPremiumToast('All chats cleared');
+  } catch(e) {}
+}
+
+/* ══════════════════════════════════════════════
+   AURORA CANVAS INJECTION
+══════════════════════════════════════════════ */
+(function injectAuroraCanvas() {
+  if (document.getElementById('auroraCanvas')) return;
+  const canvas = document.createElement('canvas');
+  canvas.id = 'auroraCanvas';
+  document.body.prepend(canvas);
+})();
+
+/* ══════════════════════════════════════════════
+   EXPORT MODAL ENHANCEMENTS (extend existing)
+══════════════════════════════════════════════ */
+(function enhanceExportModal() {
+  const exportOverlay = document.getElementById('exportOverlay');
+  if (!exportOverlay) return;
+
+  // Find the modal body
+  const body = exportOverlay.querySelector('.ranai-modal-body');
+  if (!body) return;
+
+  // Replace the export button grid with premium version
+  const existingGrid = body.querySelector('div[style*="grid-template-columns"]');
+  if (existingGrid) {
+    existingGrid.style.display = 'grid';
+    existingGrid.style.gridTemplateColumns = 'repeat(2, 1fr)';
+    existingGrid.style.gap = '10px';
+    existingGrid.style.marginBottom = '12px';
+    existingGrid.innerHTML = `
+      <button class="export-format-btn" onclick="exportChatPremium('txt','current')">
+        <span class="export-icon">📄</span><span>Plain Text</span>
+      </button>
+      <button class="export-format-btn" onclick="exportChatPremium('md','current')">
+        <span class="export-icon">📝</span><span>Markdown</span>
+      </button>
+      <button class="export-format-btn" onclick="exportChatPremium('json','current')">
+        <span class="export-icon">🗂️</span><span>JSON</span>
+      </button>
+      <button class="export-format-btn" onclick="exportChatPremium('pdf','current')">
+        <span class="export-icon">📋</span><span>PDF</span>
+      </button>
+    `;
+  }
+})();
