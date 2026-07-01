@@ -318,10 +318,9 @@ app.post("/chat", (req, res) => {
   });
 });
 // ========== API KEYS ==========
-const GEMINI_API_KEY = "AIzaSyA8t4ehEcTCz14tuI6DLSznGNRvWqzKj7Y";
 const TAVILY_API_KEY = "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";
 const DEEPSEEK_API_KEY = "d69c64d0-d7dd-4670-999b-3121add422d4";
-const OPENAI_API_KEY = "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"; // 🔑 Apni OpenAI API key yahan daalo
+const OPENAI_API_KEY = "sk-ijklmnop5678efghijklmnop5678efghijklmnop"; // 🔑 Apni OpenAI API key yahan daalo
 
 // ========== AI SETUP ==========
 let model = null;
