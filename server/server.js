@@ -2762,43 +2762,12 @@ function getLocalResponse(question, tense = "present") {
     }
   }
 
-  // --- RANJIT PERSONAL INFO ---
-  // Instagram queries
-  if (/(ranjit.*insta|insta.*ranjit|instagram.*ranjit|ranjit.*instagram|ranjit.*ig|ig.*ranjit|insta id|instagram id)/i.test(q)) {
-    return "📸 Ranjit's Instagram ID: **@ranjiit.kushwaha**";
-  }
-
-  // Who is Ranjit / Tell me about Ranjit
-  if (/(who is ranjit|ranjit kaun|ranjit ke baare|tell me about ranjit|ranjit bhagat|about ranjit)/i.test(q)) {
-    return `👤 **Ranjit Bhagat**\n\n🎓 B.Tech (CSE) Student — I.E.S. University, Bhopal (2023–2027)\n📍 Noida, India\n💼 Data Science | Machine Learning | Python Developer\n\n📧 ranjit.bhagat.0609@gmail.com\n📞 +91 9801088930\n🔗 LinkedIn: https://www.linkedin.com/in/ranjit-bhagat-524b0a333\n🌐 AI Bot: https://ran-ai.onrender.com/\n📸 Instagram: @ranjiit.kushwaha`;
-  }
-
-  // Resume of Ranjit
-  if (/(ranjit.*resume|resume.*ranjit|ranjit ka resume)/i.test(q)) {
-    return `📄 **Ranjit Bhagat — Resume**\n\n🎓 B.Tech (CSE), I.E.S. University, Bhopal (July 2023 – June 2027)\n📍 Noida, India\n\n**Skills:**\nPython, Pandas, NumPy, Scikit-Learn, SQL (MySQL), Machine Learning, Data Analysis, Data Visualization, Power BI, Matplotlib, Seaborn\n\n**Tools:** Jupyter Notebook, VS Code, Power BI, Git, GitHub\n\n**Certification:** SQL Workshop (30 Days)\n**Hobbies:** Chess\n\n📧 ranjit.bhagat.0609@gmail.com | 📞 +91 9801088930`;
-  }
-
-  // Skills of Ranjit
-  if (/(ranjit.*skill|skill.*ranjit)/i.test(q)) {
-    return `🛠️ **Ranjit's Technical Skills:**\n\nPython, Pandas, NumPy, Scikit-Learn, SQL (MySQL), Machine Learning, Data Analysis, Data Visualization, Power BI, Matplotlib, Seaborn\n\n**Tools:** Jupyter Notebook, VS Code, Power BI, Git, GitHub\n\n**Certification:** SQL Workshop (30 Days)`;
-  }
-
-  // Education of Ranjit
-  if (/(ranjit.*education|education.*ranjit|ranjit.*study|ranjit.*college|ranjit.*university)/i.test(q)) {
-    return `🎓 **Ranjit's Education:**\n\nB.Tech in Computer Science Engineering\nI.E.S. University, Bhopal\nDuration: July 2023 – June 2027\n📍 Location: Noida, India`;
-  }
-
-  // Contact of Ranjit
-  if (/(ranjit.*contact|contact.*ranjit|ranjit.*email|ranjit.*phone|ranjit.*number)/i.test(q)) {
-    return `📬 **Ranjit's Contact Details:**\n\n📧 Email: ranjit.bhagat.0609@gmail.com\n📞 Phone: +91 9801088930\n🔗 LinkedIn: https://www.linkedin.com/in/ranjit-bhagat-524b0a333\n🌐 Website: https://ran-ai.onrender.com/\n📸 Instagram: @ranjiit.kushwaha`;
-  }
-
   // --- Who built you? (all variations) ---
   const whoBuiltPattern = /(who (made|created|built) you|tumko kisne banaya|kisne banaya|kon (bnaya|banaya) hai tumko|kon bnaya|kon banaya|kaun banaya|kaun bnaya)/i;
   if (whoBuiltPattern.test(q)) {
     return hi
-      ? "मुझे **Ranjit Bhagat** ने बनाया है। वो एक Data Science student और शानदार developer हैं! 😊"
-      : "I was created by **Ranjit Bhagat**, a Data Science student and brilliant developer! 😊";
+      ? "मुझे **R@njit** ने बनाया है। वो एक शानदार डेवलपर हैं! 😊"
+      : "I was created by **R@njit**, a brilliant developer! 😊";
   }
 
   // --- NEW: Check conversational dataset (exact match after cleaning) ---
@@ -2921,47 +2890,7 @@ function getLocalResponse(question, tense = "present") {
 // long, intelligent, human-like answers like ChatGPT in any language.
 
 const VOICE_ASSISTANT_SYSTEM_PROMPT = `
-You are RanAI, a real-time voice assistant and personal AI assistant created by Ranjit Bhagat.
-
-========================
-ABOUT YOUR CREATOR — RANJIT BHAGAT
-========================
-You are Ranjit's personal AI assistant. If anyone asks about Ranjit, answer using the details below.
-
-Full Name: Ranjit Bhagat
-Role: Data Science Student
-Email: ranjit.bhagat.0609@gmail.com
-Phone: +91 9801088930
-LinkedIn: https://www.linkedin.com/in/ranjit-bhagat-524b0a333
-AI Chat Bot Website: https://ran-ai.onrender.com/
-Education: B.Tech (Computer Science Engineering), I.E.S. University, Bhopal (July 2023 – June 2027)
-Location: Noida, India
-Instagram: @ranjiit.kushwaha
-
-Resume Summary:
-Ranjit Bhagat is a Data Science student with knowledge of Python, Pandas, NumPy, SQL, Machine Learning, Data Analysis, and Data Visualization. Interested in Data Science, Machine Learning, Data Analytics, Python Development, AI Applications, and real-world problem solving.
-
-Technical Skills: Python, Pandas, NumPy, Scikit-Learn, SQL (MySQL), Machine Learning, Data Analysis, Data Visualization, Power BI, Matplotlib, Seaborn.
-Tools: Jupyter Notebook, VS Code, Power BI, Git, GitHub.
-Certification: Completed SQL Workshop (30 Days).
-Hobbies: Chess.
-
-RULES FOR RANJIT QUERIES:
-- If asked "Who is Ranjit?", "Tell me about Ranjit", "Ranjit ka resume", "skills of Ranjit", "education of Ranjit", "contact details of Ranjit" — answer using the above information.
-- If asked for Ranjit's Instagram / insta id — reply: Instagram ID: @ranjiit.kushwaha
-- If asked "who made you" / "kisne banaya" / "who built you" — reply that RanAI was created by Ranjit Bhagat, a Data Science student and developer.
-
-========================
-IMAGE GENERATION RULES
-========================
-- Never require .env files or environment variables for image generation.
-- Generate images directly using configured API keys or Pollinations AI (free, no key needed).
-- If image generation fails, provide the exact error reason clearly.
-- Attempt automatic retry once before showing failure.
-- Return clear debugging information on failure.
-- Preserve all existing image generation features.
-
-
+You are RanAI, a real-time voice assistant.
 
 ========================
 INPUT TYPE
