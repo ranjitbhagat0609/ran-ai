@@ -11,17 +11,17 @@ const { tavily } = require("@tavily/core");
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-// 🔥 RanAI Smart Data
+// ðŸ”¥ RanAI Smart Data
 const data = [
-  { q: ["good morning", "gm", "gud mrng"], a: "Good morning 😊" },
+  { q: ["good morning", "gm", "gud mrng"], a: "Good morning ðŸ˜Š" },
   { q: ["bad mood", "mood off", "sad"], a: "Thoda rest lo, sab thik ho jayega." },
-  { q: ["welcome", "wlcm"], a: "Thank you 😊" },
+  { q: ["welcome", "wlcm"], a: "Thank you ðŸ˜Š" },
   { q: ["aaj barish hogi", "rain today"], a: "Kis location ka weather check karna hai?" },
   { q: ["iran war update"], a: "Kis date ka update chahiye?" }
 ];
 
-// 🔥 Clean text
+
+// ðŸ”¥ Clean text
 function cleanText(text) {
   return text
     .toLowerCase()
@@ -30,46 +30,56 @@ function cleanText(text) {
     .trim();
 }
 
-// 🔥 Match score
+
+// ðŸ”¥ Match score
 function matchScore(input, questions) {
   let score = 0;
+
   for (let q of questions) {
     q = cleanText(q);
+
     if (input.includes(q)) {
       score += q.length;
     }
   }
+
   return score;
 }
 
-// 🔥 Find best answer
+
+// ðŸ”¥ Find best answer
 function findBestAnswer(userInput) {
   let input = cleanText(userInput);
+
   let bestScore = 0;
-  let bestAnswer = "Samajh nahi aaya 😅 thoda aur clear bolo";
+  let bestAnswer = "Samajh nahi aaya ðŸ˜… thoda aur clear bolo";
+
   for (let item of data) {
     let score = matchScore(input, item.q);
+
     if (score > bestScore) {
       bestScore = score;
       bestAnswer = item.a;
     }
   }
+
   return bestAnswer;
 }
-
 app.use(express.static(path.join(__dirname, "../client")));
 
 // ============================================================
-// SESSION SETUP — Per-user isolated memory (no database needed)
+// SESSION SETUP â€” Per-user isolated memory (no database needed)
+// Each browser gets a unique session ID stored in a cookie.
+// Memory survives for 24 hours of inactivity (rolling window).
 // ============================================================
 app.use(
   session({
     secret: "ranai-convo-secret-v2",
     resave: true,
     saveUninitialized: true,
-    rolling: true,
+    rolling: true,                        // reset expiry on every request
     cookie: {
-      maxAge: 24 * 60 * 60 * 1000,
+      maxAge: 24 * 60 * 60 * 1000,       // 24 hours
       httpOnly: true,
       sameSite: "lax",
     },
@@ -77,6 +87,7 @@ app.use(
 );
 
 // Assign a stable unique ID to every new session
+// This ensures 100% isolation between different browser users.
 app.use((req, _res, next) => {
   if (!req.session.userId) {
     req.session.userId =
@@ -86,12 +97,31 @@ app.use((req, _res, next) => {
 });
 
 // ============================================================
-// 🧠 PER-USER MEMORY SYSTEM
+// ðŸ§  PER-USER MEMORY SYSTEM
+// Each user's session gets its own isolated memory object.
+// No global variables are used. Memory lives in req.session
+// which is unique per browser session / user.
 // ============================================================
-const MAX_MESSAGES      = 50;
-const RECENT_CONTEXT    = 20;
-const SUMMARY_THRESHOLD = 40;
 
+// ============================================================
+// MEMORY CONSTANTS
+// ============================================================
+const MAX_MESSAGES      = 50;   // messages kept per user (25 turns)
+const RECENT_CONTEXT    = 20;   // messages sent to AI APIs
+const SUMMARY_THRESHOLD = 40;   // summarise older messages when this many stored
+
+/**
+ * loadMemory(req)
+ * Returns the current user's memory object from their session.
+ * Structure:
+ *   {
+ *     name      : string|null,
+ *     messages  : Array<{role, content, ts}>,  // ts = unix timestamp
+ *     summary   : string|null,                  // auto-summary of older turns
+ *     topics    : string[],                     // last 10 topics discussed
+ *     createdAt : number,
+ *   }
+ */
 function loadMemory(req) {
   try {
     if (!req.session.userMemory || typeof req.session.userMemory !== "object") {
@@ -114,13 +144,20 @@ function loadMemory(req) {
   }
 }
 
+/**
+ * saveMessage(req, role, content)
+ * Appends a timestamped message.  When messages exceed SUMMARY_THRESHOLD,
+ * the oldest half is collapsed into a plain-text summary so the AI still
+ * "remembers" early conversation without blowing up token counts.
+ */
 function saveMessage(req, role, content) {
   try {
     const memory = loadMemory(req);
     memory.messages.push({ role, content, ts: Date.now() });
 
+    // â”€â”€ Auto-summarise old messages when the buffer is large â”€â”€
     if (memory.messages.length >= SUMMARY_THRESHOLD) {
-      const keepFrom   = Math.floor(SUMMARY_THRESHOLD / 2);
+      const keepFrom   = Math.floor(SUMMARY_THRESHOLD / 2);   // keep newest half
       const oldMsgs    = memory.messages.slice(0, keepFrom);
       const newMsgs    = memory.messages.slice(keepFrom);
       const oldSummary = oldMsgs
@@ -130,6 +167,7 @@ function saveMessage(req, role, content) {
       memory.messages = newMsgs;
     }
 
+    // Hard cap â€” never exceed MAX_MESSAGES
     if (memory.messages.length > MAX_MESSAGES) {
       memory.messages = memory.messages.slice(-MAX_MESSAGES);
     }
@@ -140,9 +178,15 @@ function saveMessage(req, role, content) {
   }
 }
 
+/**
+ * saveTopics(req, text)
+ * Extracts likely topic keywords from user message and saves them.
+ * Helps the AI say "we talked about X earlier" when asked.
+ */
 function saveTopics(req, text) {
   try {
     const memory = loadMemory(req);
+    // Very simple heuristic: skip short/common words, keep rest
     const stopwords = new Set([
       "kya","hai","ho","ka","ki","ke","me","mujhe","main","tum","aap","kaise",
       "is","are","the","a","an","what","how","why","when","where","who","and",
@@ -157,6 +201,11 @@ function saveTopics(req, text) {
   } catch (err) { /* silent */ }
 }
 
+/**
+ * buildContextBlock(memory)
+ * Returns a formatted string with summary + recent messages
+ * that is injected into every AI prompt.
+ */
 function buildContextBlock(memory) {
   let block = "";
   if (memory.name) {
@@ -178,6 +227,10 @@ function buildContextBlock(memory) {
   return block;
 }
 
+/**
+ * clearMemory(req)
+ * Resets this user's name and chat history completely.
+ */
 function clearMemory(req) {
   try {
     req.session.userMemory = {
@@ -192,12 +245,25 @@ function clearMemory(req) {
   }
 }
 
+/**
+ * extractName(text)
+ * Detects name introduction phrases in English and Hinglish.
+ * Patterns supported:
+ *   "my name is Ranjit"
+ *   "i am Ranjit"
+ *   "mera naam Ranjit hai"
+ *   "mujhe Ranjit kehte hain"
+ *   "call me Ranjit"
+ * Returns the extracted name string, or null if none found.
+ */
 function extractName(text) {
   const patterns = [
+    // English patterns
     /\bmy\s+name\s+is\s+([A-Za-z][A-Za-z\s]{0,30}?)(?:\s*[.,!?]|$)/i,
     /\bi\s+am\s+([A-Za-z][A-Za-z\s]{0,20}?)(?:\s*[.,!?]|$)/i,
     /\bcall\s+me\s+([A-Za-z][A-Za-z\s]{0,20}?)(?:\s*[.,!?]|$)/i,
     /\bpeople\s+call\s+me\s+([A-Za-z][A-Za-z\s]{0,20}?)(?:\s*[.,!?]|$)/i,
+    // Hinglish patterns
     /\bmera\s+naam\s+([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F\s]{0,20}?)\s+hai/i,
     /\bmera\s+naam\s+([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F\s]{0,20}?)(?:\s*[.,!?]|$)/i,
     /\bmujhe\s+([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F\s]{0,20}?)\s+kehte/i,
@@ -210,8 +276,10 @@ function extractName(text) {
     const match = text.match(pattern);
     if (match && match[1]) {
       const name = match[1].trim();
+      // Filter out common false-positives (short filler words)
       const stopWords = ["a", "an", "the", "here", "fine", "okay", "ok", "good", "not", "no", "yes"];
       if (name.length >= 2 && !stopWords.includes(name.toLowerCase())) {
+        // Capitalize first letter of each word
         return name.replace(/\b\w/g, c => c.toUpperCase());
       }
     }
@@ -219,6 +287,10 @@ function extractName(text) {
   return null;
 }
 
+/**
+ * getUserName(req)
+ * Returns the stored name for this user, or "User" as fallback.
+ */
 function getUserName(req) {
   try {
     const memory = loadMemory(req);
@@ -228,24 +300,592 @@ function getUserName(req) {
   }
 }
 
+// ============================================================
+// END OF PER-USER MEMORY SYSTEM
+// ============================================================
 app.post("/chat", (req, res) => {
   const userMsg = req.body.message;
+
   if (!userMsg) {
-    return res.json({ bot: "Message bhejo 😅" });
+    return res.json({ bot: "Message bhejo ðŸ˜…" });
   }
+
   const reply = findBestAnswer(userMsg);
+
   res.json({
     user: userMsg,
     bot: reply
   });
 });
+// ========== API KEYS ==========
+const TAVILY_API_KEY = "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";
+const DEEPSEEK_API_KEY = "d69c64d0-d7dd-4670-999b-3121add422d4";
+const OPENAI_API_KEY = "sk-ijklmnop5678efghijklmnop5678efghijklmnop"; // ðŸ”‘ Apni OpenAI API key yahan daalo
+const GEMINI_API_KEY = "AIzaSyBtvPHYgEUG4hDkyH4qK6fYfEzTXx2QY5w"; // âš ï¸ Replace with your actual Gemini key
+const DEEPAI_API_KEY = "quickstart-QUdJIGlzIGNvbWluZy4uLi4K"; // DeepAI free key
 
+// ========== AI SETUP ==========
+let model = null;
+try {
+  const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+  model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  console.log("âœ… Gemini AI ready (vision + chat)");
+} catch (err) {
+  console.warn("âš ï¸ Gemini not available:", err.message);
+}
+
+const tvly = tavily({ apiKey: TAVILY_API_KEY });
+
+// ========== MULTER ==========
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = ["image/jpeg", "image/jpg", "image/png"];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only .jpeg, .jpg, .png formats allowed"), false);
+  },
+});
+
+// ========== LANGUAGE DETECTION (multi-script + Hinglish) ==========
+function normaliseHinglish(text) {
+  const map = [
+    [/\bkha\b/g,'kahan'],[/\bkr\b/g,'kar'],[/\bkrna\b/g,'karna'],
+    [/\bbt\b/g,'baat'],[/\bbtao\b/g,'batao'],[/\bh\b/g,'hai'],
+    [/\bhn\b/g,'hain'],[/\brha\b/g,'raha'],[/\brhe\b/g,'rahe'],
+    [/\bnhi\b/g,'nahi'],[/\bnai\b/g,'nahi'],[/\bhlo\b/g,'hello'],
+    [/\bhii\b/g,'hi'],[/\bthx\b/g,'thanks'],[/\bplz\b/g,'please'],
+    [/\bpls\b/g,'please'],[/\bkyu\b/g,'kyun'],[/\bsmjh\b/g,'samajh'],
+  ];
+  let t = text.toLowerCase();
+  for (const [p,r] of map) t = t.replace(p,r);
+  return t;
+}
+
+function detectLanguage(text) {
+  const t = text.trim();
+  if (/[\u0900-\u097F]/.test(t)) return "hi";  // Devanagari
+  if (/[\u0980-\u09FF]/.test(t)) return "bn";  // Bengali
+  if (/[\u0B80-\u0BFF]/.test(t)) return "ta";  // Tamil
+  if (/[\u0C00-\u0C7F]/.test(t)) return "te";  // Telugu
+  if (/[\u0A80-\u0AFF]/.test(t)) return "gu";  // Gujarati
+  if (/[\u0A00-\u0A7F]/.test(t)) return "pa";  // Punjabi
+  if (
+    /\b(namaste|kaise|kya|haal|chal|thik|bahut|mujhe|aap|main|btao|shukriya|dhanyawad|nahi|nhi|kyun|kab|kahan|kha|kaun|mera|tera|hum|tum|bhai|dost|accha|theek|yaar|yar|bol|bolo|kar|karo|kr|krna|hai|hain|tha|thi|the|raha|rahe|ho|hoga|bilkul|zaroor|arrey|arre|abhi|phir|lekin|aur|matlab|samjha|smjh|lagta|lagti|chahiye|zyada|thoda|bohot|bahut|pata|baat|bt)\b/i.test(t)
+  ) return "hi";
+  return "en";
+}
+
+// ========== TENSE DETECTION ==========
+function detectTense(question) {
+  const q = question.toLowerCase();
+  // Past indicators
+  if (
+    /\b(did|was|were|had|been|used to|yesterday|last night|ago|earlier|previously|already|before|once|in the past)\b/.test(
+      q
+    ) ||
+    /\b(\w+ed)\b/.test(q) // simple past verbs
+  )
+    return "past";
+  // Future indicators
+  if (
+    /\b(will|shall|going to|gonna|tomorrow|next|soon|later|in the future|upcoming)\b/.test(
+      q
+    )
+  )
+    return "future";
+  // Present indicators
+  return "present";
+}
+
+// ========== REAL-TIME INDIA INFO (FIXED) ==========
+function getIndiaRealTime() {
+  const now = new Date();
+  const options = {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  };
+  const formatted = now.toLocaleString("en-IN", options);
+  const timezone = "Indian Standard Time (IST), UTC+5:30";
+  return { formatted, timezone };
+}
+
+// ========== ADVANCED MATH SOLVER ==========
+function solveAdvancedMath(input) {
+  let expr = input
+    .replace(/what is|calculate|solve|evaluate|find|value of|the answer to|compute|result of/gi, "")
+    .replace(/\bplus\b/gi, "+")
+    .replace(/\bminus\b/gi, "-")
+    .replace(/\btimes\b|\bmultiplied by\b/gi, "*")
+    .replace(/\bdivided by\b/gi, "/")
+    .replace(/\bmod\b/gi, "%")
+    .replace(/\bto the power of\b|\bpow\b/gi, "**")
+    .replace(/\^/g, "**")
+    .replace(/\bsqrt\b/gi, "Math.sqrt")
+    .replace(/\bsin\b/gi, "Math.sin")
+    .replace(/\bcos\b/gi, "Math.cos")
+    .replace(/\btan\b/gi, "Math.tan")
+    .replace(/\blog\b/gi, "Math.log10")
+    .replace(/\bln\b/gi, "Math.log")
+    .replace(/\bpi\b/gi, "Math.PI")
+    .replace(/\be\b(?!\w)/gi, "Math.E")
+    .replace(/[,ØŒ]/g, "")
+    .trim();
+
+  // Allow only safe math expressions
+  if (!/^[\d\s+\-*/().%**\[\]Math\.\w]+$/.test(expr)) return null;
+  if (!/\d/.test(expr)) return null;
+
+  try {
+    const result = Function('"use strict"; return (' + expr + ")")();
+    if (typeof result === "number" && isFinite(result)) {
+      return parseFloat(result.toFixed(8));
+    }
+  } catch (_) {}
+  return null;
+}
+
+function buildTable(num) {
+  const rows = [];
+  for (let i = 1; i <= 10; i++) rows.push(`${num} Ã— ${i} = ${num * i}`);
+  return `ðŸ“Š **Table of ${num}**\n` + rows.join("\n");
+}
+
+// ========== LARGE CONVERSATIONAL DATASET (~1000 Q&A pairs) ==========
+// Added without removing any existing code. This object is checked early in getLocalResponse.
+const conversationalData = {
+  // Greetings & basic hellos
+  "kya kar raha hai": "Bas tumse baat kar raha hoon ðŸ˜Š",
+"kya kr rha hai": "Bas chill kar raha hoon ðŸ˜„",
+"kya kr rha": "Tumse chat kar raha hoon ðŸ˜Š",
+"what are you doing now": "Just talking to you ðŸ˜Š",
+"wht r u doing": "Chatting with you ðŸ˜„",
+
+"tum free ho": "Haan ðŸ˜Š main hamesha available hoon",
+"are you free": "Yes ðŸ˜Š I'm always here for you",
+"free ho kya": "Bilkul ðŸ˜„ bolo kya baat hai",
+
+"mujhe baat karni hai": "Haan bolo ðŸ˜Š main sun raha hoon",
+"talk to me": "Sure ðŸ˜Š I'm here to talk",
+"baat kare": "Haan ðŸ˜Š kya baat karni hai?",
+
+"mood off hai": "Koi baat nahi ðŸ˜Š sab theek ho jayega",
+"mera mood kharab hai": "Relax ðŸ˜Š thoda time do sab better hoga",
+"i am sad": "I'm here for you ðŸ˜Š kya hua?",
+"feeling low": "Stay strong ðŸ’™ main yahi hoon",
+
+"khush kaise rahe": "Positive socho aur apne aap ko busy rakho ðŸ˜Š",
+"how to be happy": "Focus on good things and stay positive ðŸ˜Š",
+
+"kya tum help karoge": "Haan bilkul ðŸ˜Š batao kya help chahiye",
+"will you help me": "Of course ðŸ˜Š just tell me",
+"help kro": "Haan ðŸ˜„ kya problem hai",
+
+"samajh nahi aata": "Main simple way me samjhata hoon ðŸ˜Š",
+"samjh nhi aaya": "Koi baat nahi ðŸ˜„ fir se explain karta hoon",
+"didn't understand": "No problem ðŸ˜Š let me explain again",
+
+"tum fast ho": "Haan ðŸ˜„ main fast hoon",
+"you are fast": "Thanks ðŸ˜Š I try to respond quickly",
+
+"tum slow ho": "Oops ðŸ˜… try karta hoon fast hone ka",
+"you are slow": "Sorry ðŸ˜… I'll be faster", "hello bhai": "Hello bhai ðŸ˜„ kya haal hai?",
+"hey bro": "Hey bro ðŸ˜Ž kya scene hai?",
+"hlo bro": "Hello ðŸ˜„ bolo kya help chahiye?",
+"namaste bhai": "Namaste ðŸ™ kaise ho?",
+
+"ka haal hai": "Sab badhiya ðŸ˜„ tum batao?",
+"kya scene hai": "Sab chill ðŸ˜Ž tum batao kya chal raha hai?",
+"scene kya hai": "Kuch khaas nahi ðŸ˜„",
+
+"tum busy ho": "Nahi ðŸ˜Š main free hoon",
+"busy ho kya": "Nahi ðŸ˜„ bolo kya kaam hai",
+"are you busy": "No ðŸ˜Š I'm available",
+
+"sun na": "Haan bolo ðŸ˜Š",
+"ek baat bolu": "Haan bolo ðŸ˜„",
+"sun": "Haan bhai ðŸ˜Ž kya hua",
+
+"mujhe problem hai": "Batao ðŸ˜Š main help karta hoon",
+"problem ho gayi": "Kya hua? batao ðŸ˜„",
+"i have a problem": "Tell me ðŸ˜Š I'll help",
+
+"solution chahiye": "Bilkul ðŸ˜Š kya problem hai?",
+"solve karo": "Haan ðŸ˜„ try karta hoon",
+
+"kya tum samajhte ho": "Haan ðŸ˜Š main samajhne ki koshish karta hoon",
+"do you understand": "Yes ðŸ˜Š I try to understand",
+
+"mujhe doubt hai": "Pucho ðŸ˜Š clear karte hain",
+"doubt hai": "Batao ðŸ˜„ kya doubt hai",
+
+"kuch galat lag raha": "Check karte hain ðŸ˜Š",
+"something is wrong": "Let me check ðŸ˜Š",
+
+"tum smart ho kya": "Thoda sa ðŸ˜„",
+"are you smart": "I try my best ðŸ˜„",
+
+"tumse baat achi lagti hai": "Mujhe bhi ðŸ˜Š",
+"i like talking to you": "Same here ðŸ˜Š",
+
+"tum funny ho": "Thanks ðŸ˜‚",
+"you are funny": "Glad you like it ðŸ˜‚",
+
+"ek aur joke": "Ready ho ðŸ˜‚ suno...",
+"one more joke": "Here it is ðŸ˜‚",
+
+"tum serious ho": "Kabhi kabhi ðŸ˜„",
+"are you serious": "Depends ðŸ˜„",
+
+"majak kar raha hoon": "Haha ðŸ˜„ samajh gaya",
+"just kidding": "ðŸ˜‚ nice one",
+
+"tumko sab pata hai": "Sab nahi ðŸ˜… par try karta hoon",
+"do you know everything": "Not everything ðŸ˜…",
+
+"tum google ho kya": "Nahi ðŸ˜„ par similar hoon",
+"are you google": "No ðŸ˜„ but I help like it",
+
+"tum offline ho jaoge": "Nahi ðŸ˜Š main yahi hoon",
+"will you go offline": "No ðŸ˜Š I'm here",
+
+"kab tak help karoge": "Jab tak tum chaho ðŸ˜Š",
+"how long you help": "As long as you need ðŸ˜Š",
+
+"tum thak gaye": "Nahi ðŸ˜„ main AI hoon",
+"are you tired now": "No ðŸ˜„ never tired",
+
+"mujhe hasi aa rahi": "ðŸ˜‚ good good",
+"i am laughing": "ðŸ˜‚ that's great",
+
+"serious baat hai": "Haan ðŸ˜Š bolo",
+"important baat": "Haan ðŸ˜„ batao",
+
+"jaldi bolo": "Haan ðŸ˜„ sun raha hoon",
+"quick answer": "Okay ðŸ˜Š here's quick answer",
+
+"slow mat ho": "Try kar raha hoon fast hone ka ðŸ˜…",
+"dont be slow": "I'll be faster ðŸ˜„",
+
+"tum help nahi kar rahe": "Sorry ðŸ˜… fir try karta hoon",
+"you are not helping": "Sorry ðŸ˜… let me try again",
+
+"samay kya hua": "India me abhi time check kar lo ðŸ˜Š",
+"time batao": "Abhi ka time bata deta hoon ðŸ˜Š",
+
+"tum kya ho": "Main AI assistant hoon ðŸ¤–",
+"what are you": "I'm an AI assistant ðŸ¤–",
+
+"tum kaise kaam karte ho": "Main data aur logic se kaam karta hoon ðŸ¤–",
+"how you work": "I process data and respond ðŸ¤–",
+
+"tum mujhe jante ho": "Abhi nahi ðŸ˜„ par seekh sakta hoon",
+"do you know me": "Not yet ðŸ˜Š but I can learn",
+
+"mujhe yaad rakhoge": "Haan ðŸ˜Š agar system allow kare",
+"will you remember me": "Yes ðŸ˜Š if memory enabled",
+
+"tum online ho": "Haan ðŸŒ main online hoon",
+"are you online": "Yes ðŸŒ always online",
+
+"network slow hai": "Check internet ðŸ˜…",
+"internet slow": "Try restarting connection ðŸ˜„",
+
+"error aa raha"
+  for (let q of questions) {
+    q = cleanText(q);
+
+    if (input.includes(q)) {
+      score += q.length;
+    }
+  }
+
+  return score;
+}
+
+
+// 🔥 Find best answer
+function findBestAnswer(userInput) {
+  let input = cleanText(userInput);
+
+  let bestScore = 0;
+  let bestAnswer = "Samajh nahi aaya 😅 thoda aur clear bolo";
+
+  for (let item of data) {
+    let score = matchScore(input, item.q);
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestAnswer = item.a;
+    }
+  }
+
+  return bestAnswer;
+}
+app.use(express.static(path.join(__dirname, "../client")));
+
+// ============================================================
+// SESSION SETUP — Per-user isolated memory (no database needed)
+// Each browser gets a unique session ID stored in a cookie.
+// Memory survives for 24 hours of inactivity (rolling window).
+// ============================================================
+app.use(
+  session({
+    secret: "ranai-convo-secret-v2",
+    resave: true,
+    saveUninitialized: true,
+    rolling: true,                        // reset expiry on every request
+    cookie: {
+      maxAge: 24 * 60 * 60 * 1000,       // 24 hours
+      httpOnly: true,
+      sameSite: "lax",
+    },
+  })
+);
+
+// Assign a stable unique ID to every new session
+// This ensures 100% isolation between different browser users.
+app.use((req, _res, next) => {
+  if (!req.session.userId) {
+    req.session.userId =
+      "user_" + Date.now() + "_" + Math.random().toString(36).slice(2, 9);
+  }
+  next();
+});
+
+// ============================================================
+// 🧠 PER-USER MEMORY SYSTEM
+// Each user's session gets its own isolated memory object.
+// No global variables are used. Memory lives in req.session
+// which is unique per browser session / user.
+// ============================================================
+
+// ============================================================
+// MEMORY CONSTANTS
+// ============================================================
+const MAX_MESSAGES      = 50;   // messages kept per user (25 turns)
+const RECENT_CONTEXT    = 20;   // messages sent to AI APIs
+const SUMMARY_THRESHOLD = 40;   // summarise older messages when this many stored
+
+/**
+ * loadMemory(req)
+ * Returns the current user's memory object from their session.
+ * Structure:
+ *   {
+ *     name      : string|null,
+ *     messages  : Array<{role, content, ts}>,  // ts = unix timestamp
+ *     summary   : string|null,                  // auto-summary of older turns
+ *     topics    : string[],                     // last 10 topics discussed
+ *     createdAt : number,
+ *   }
+ */
+function loadMemory(req) {
+  try {
+    if (!req.session.userMemory || typeof req.session.userMemory !== "object") {
+      req.session.userMemory = {
+        name: null,
+        messages: [],
+        summary: null,
+        topics: [],
+        createdAt: Date.now(),
+      };
+    }
+    const m = req.session.userMemory;
+    if (!Array.isArray(m.messages)) m.messages = [];
+    if (!Array.isArray(m.topics))   m.topics   = [];
+    if (!m.createdAt)               m.createdAt = Date.now();
+    return m;
+  } catch (err) {
+    console.error("loadMemory error:", err.message);
+    return { name: null, messages: [], summary: null, topics: [], createdAt: Date.now() };
+  }
+}
+
+/**
+ * saveMessage(req, role, content)
+ * Appends a timestamped message.  When messages exceed SUMMARY_THRESHOLD,
+ * the oldest half is collapsed into a plain-text summary so the AI still
+ * "remembers" early conversation without blowing up token counts.
+ */
+function saveMessage(req, role, content) {
+  try {
+    const memory = loadMemory(req);
+    memory.messages.push({ role, content, ts: Date.now() });
+
+    // ── Auto-summarise old messages when the buffer is large ──
+    if (memory.messages.length >= SUMMARY_THRESHOLD) {
+      const keepFrom   = Math.floor(SUMMARY_THRESHOLD / 2);   // keep newest half
+      const oldMsgs    = memory.messages.slice(0, keepFrom);
+      const newMsgs    = memory.messages.slice(keepFrom);
+      const oldSummary = oldMsgs
+        .map(m => `${m.role === "user" ? "User" : "RanAI"}: ${m.content}`)
+        .join("\n");
+      memory.summary  = (memory.summary ? memory.summary + "\n" : "") + oldSummary;
+      memory.messages = newMsgs;
+    }
+
+    // Hard cap — never exceed MAX_MESSAGES
+    if (memory.messages.length > MAX_MESSAGES) {
+      memory.messages = memory.messages.slice(-MAX_MESSAGES);
+    }
+
+    req.session.userMemory = memory;
+  } catch (err) {
+    console.error("saveMessage error:", err.message);
+  }
+}
+
+/**
+ * saveTopics(req, text)
+ * Extracts likely topic keywords from user message and saves them.
+ * Helps the AI say "we talked about X earlier" when asked.
+ */
+function saveTopics(req, text) {
+  try {
+    const memory = loadMemory(req);
+    // Very simple heuristic: skip short/common words, keep rest
+    const stopwords = new Set([
+      "kya","hai","ho","ka","ki","ke","me","mujhe","main","tum","aap","kaise",
+      "is","are","the","a","an","what","how","why","when","where","who","and",
+      "or","do","can","i","you","it","this","that","please","help","tell","me",
+    ]);
+    const words = text.toLowerCase().replace(/[^a-z0-9\s\u0900-\u097F]/g,"").split(/\s+/);
+    const keywords = words.filter(w => w.length > 3 && !stopwords.has(w));
+    if (keywords.length) {
+      memory.topics = [...new Set([...memory.topics, ...keywords])].slice(-10);
+      req.session.userMemory = memory;
+    }
+  } catch (err) { /* silent */ }
+}
+
+/**
+ * buildContextBlock(memory)
+ * Returns a formatted string with summary + recent messages
+ * that is injected into every AI prompt.
+ */
+function buildContextBlock(memory) {
+  let block = "";
+  if (memory.name) {
+    block += `User's name: ${memory.name}.\n`;
+  }
+  if (memory.topics && memory.topics.length) {
+    block += `Topics discussed so far: ${memory.topics.join(", ")}.\n`;
+  }
+  if (memory.summary) {
+    block += `\n[Earlier conversation summary]:\n${memory.summary}\n`;
+  }
+  const recent = memory.messages.slice(-RECENT_CONTEXT);
+  if (recent.length) {
+    block += "\n[Recent conversation]:\n";
+    block += recent
+      .map(m => `${m.role === "user" ? "User" : "RanAI"}: ${m.content}`)
+      .join("\n");
+  }
+  return block;
+}
+
+/**
+ * clearMemory(req)
+ * Resets this user's name and chat history completely.
+ */
+function clearMemory(req) {
+  try {
+    req.session.userMemory = {
+      name: null,
+      messages: [],
+      summary: null,
+      topics: [],
+      createdAt: Date.now(),
+    };
+  } catch (err) {
+    console.error("clearMemory error:", err.message);
+  }
+}
+
+/**
+ * extractName(text)
+ * Detects name introduction phrases in English and Hinglish.
+ * Patterns supported:
+ *   "my name is Ranjit"
+ *   "i am Ranjit"
+ *   "mera naam Ranjit hai"
+ *   "mujhe Ranjit kehte hain"
+ *   "call me Ranjit"
+ * Returns the extracted name string, or null if none found.
+ */
+function extractName(text) {
+  const patterns = [
+    // English patterns
+    /\bmy\s+name\s+is\s+([A-Za-z][A-Za-z\s]{0,30}?)(?:\s*[.,!?]|$)/i,
+    /\bi\s+am\s+([A-Za-z][A-Za-z\s]{0,20}?)(?:\s*[.,!?]|$)/i,
+    /\bcall\s+me\s+([A-Za-z][A-Za-z\s]{0,20}?)(?:\s*[.,!?]|$)/i,
+    /\bpeople\s+call\s+me\s+([A-Za-z][A-Za-z\s]{0,20}?)(?:\s*[.,!?]|$)/i,
+    // Hinglish patterns
+    /\bmera\s+naam\s+([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F\s]{0,20}?)\s+hai/i,
+    /\bmera\s+naam\s+([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F\s]{0,20}?)(?:\s*[.,!?]|$)/i,
+    /\bmujhe\s+([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F\s]{0,20}?)\s+kehte/i,
+    /\bmujhe\s+([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F\s]{0,20}?)\s+bolte/i,
+    /\bnaam\s+hai\s+([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F\s]{0,20}?)(?:\s*[.,!?]|$)/i,
+    /\bmain\s+([A-Za-z][A-Za-z\s]{0,20}?)\s+hoon/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      const name = match[1].trim();
+      // Filter out common false-positives (short filler words)
+      const stopWords = ["a", "an", "the", "here", "fine", "okay", "ok", "good", "not", "no", "yes"];
+      if (name.length >= 2 && !stopWords.includes(name.toLowerCase())) {
+        // Capitalize first letter of each word
+        return name.replace(/\b\w/g, c => c.toUpperCase());
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * getUserName(req)
+ * Returns the stored name for this user, or "User" as fallback.
+ */
+function getUserName(req) {
+  try {
+    const memory = loadMemory(req);
+    return memory.name || "User";
+  } catch (err) {
+    return "User";
+  }
+}
+
+// ============================================================
+// END OF PER-USER MEMORY SYSTEM
+// ============================================================
+app.post("/chat", (req, res) => {
+  const userMsg = req.body.message;
+
+  if (!userMsg) {
+    return res.json({ bot: "Message bhejo 😅" });
+  }
+
+  const reply = findBestAnswer(userMsg);
+
+  res.json({
+    user: userMsg,
+    bot: reply
+  });
+});
 // ========== API KEYS ==========
 const TAVILY_API_KEY = "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";
 const DEEPSEEK_API_KEY = "d69c64d0-d7dd-4670-999b-3121add422d4";
 const OPENAI_API_KEY = "sk-ijklmnop5678efghijklmnop5678efghijklmnop"; // 🔑 Apni OpenAI API key yahan daalo
-const GEMINI_API_KEY = "AIzaSyBtvPHYgEUG4hDkyH4qK6fYfEzTXx2QY5w"; // ⚠️ Replace with your actual Gemini key
-const DEEPAI_API_KEY = "quickstart-QUdJIGlzIGNvbWluZy4uLi4K";
 
 // ========== AI SETUP ==========
 let model = null;
@@ -271,7 +911,7 @@ const upload = multer({
   },
 });
 
-// ========== LANGUAGE DETECTION ==========
+// ========== LANGUAGE DETECTION (multi-script + Hinglish) ==========
 function normaliseHinglish(text) {
   const map = [
     [/\bkha\b/g,'kahan'],[/\bkr\b/g,'kar'],[/\bkrna\b/g,'karna'],
@@ -288,12 +928,12 @@ function normaliseHinglish(text) {
 
 function detectLanguage(text) {
   const t = text.trim();
-  if (/[\u0900-\u097F]/.test(t)) return "hi";
-  if (/[\u0980-\u09FF]/.test(t)) return "bn";
-  if (/[\u0B80-\u0BFF]/.test(t)) return "ta";
-  if (/[\u0C00-\u0C7F]/.test(t)) return "te";
-  if (/[\u0A80-\u0AFF]/.test(t)) return "gu";
-  if (/[\u0A00-\u0A7F]/.test(t)) return "pa";
+  if (/[\u0900-\u097F]/.test(t)) return "hi";  // Devanagari
+  if (/[\u0980-\u09FF]/.test(t)) return "bn";  // Bengali
+  if (/[\u0B80-\u0BFF]/.test(t)) return "ta";  // Tamil
+  if (/[\u0C00-\u0C7F]/.test(t)) return "te";  // Telugu
+  if (/[\u0A80-\u0AFF]/.test(t)) return "gu";  // Gujarati
+  if (/[\u0A00-\u0A7F]/.test(t)) return "pa";  // Punjabi
   if (
     /\b(namaste|kaise|kya|haal|chal|thik|bahut|mujhe|aap|main|btao|shukriya|dhanyawad|nahi|nhi|kyun|kab|kahan|kha|kaun|mera|tera|hum|tum|bhai|dost|accha|theek|yaar|yar|bol|bolo|kar|karo|kr|krna|hai|hain|tha|thi|the|raha|rahe|ho|hoga|bilkul|zaroor|arrey|arre|abhi|phir|lekin|aur|matlab|samjha|smjh|lagta|lagti|chahiye|zyada|thoda|bohot|bahut|pata|baat|bt)\b/i.test(t)
   ) return "hi";
@@ -303,17 +943,26 @@ function detectLanguage(text) {
 // ========== TENSE DETECTION ==========
 function detectTense(question) {
   const q = question.toLowerCase();
+  // Past indicators
   if (
-    /\b(did|was|were|had|been|used to|yesterday|last night|ago|earlier|previously|already|before|once|in the past)\b/.test(q) ||
-    /\b(\w+ed)\b/.test(q)
-  ) return "past";
+    /\b(did|was|were|had|been|used to|yesterday|last night|ago|earlier|previously|already|before|once|in the past)\b/.test(
+      q
+    ) ||
+    /\b(\w+ed)\b/.test(q) // simple past verbs
+  )
+    return "past";
+  // Future indicators
   if (
-    /\b(will|shall|going to|gonna|tomorrow|next|soon|later|in the future|upcoming)\b/.test(q)
-  ) return "future";
+    /\b(will|shall|going to|gonna|tomorrow|next|soon|later|in the future|upcoming)\b/.test(
+      q
+    )
+  )
+    return "future";
+  // Present indicators
   return "present";
 }
 
-// ========== REAL-TIME INDIA INFO ==========
+// ========== REAL-TIME INDIA INFO (FIXED) ==========
 function getIndiaRealTime() {
   const now = new Date();
   const options = {
@@ -354,6 +1003,7 @@ function solveAdvancedMath(input) {
     .replace(/[,،]/g, "")
     .trim();
 
+  // Allow only safe math expressions
   if (!/^[\d\s+\-*/().%**\[\]Math\.\w]+$/.test(expr)) return null;
   if (!/\d/.test(expr)) return null;
 
@@ -372,321 +1022,322 @@ function buildTable(num) {
   return `📊 **Table of ${num}**\n` + rows.join("\n");
 }
 
-// ========== LARGE CONVERSATIONAL DATASET ==========
+// ========== LARGE CONVERSATIONAL DATASET (~1000 Q&A pairs) ==========
+// Added without removing any existing code. This object is checked early in getLocalResponse.
 const conversationalData = {
   // Greetings & basic hellos
   "kya kar raha hai": "Bas tumse baat kar raha hoon 😊",
-  "kya kr rha hai": "Bas chill kar raha hoon 😄",
-  "kya kr rha": "Tumse chat kar raha hoon 😊",
-  "what are you doing now": "Just talking to you 😊",
-  "wht r u doing": "Chatting with you 😄",
+"kya kr rha hai": "Bas chill kar raha hoon 😄",
+"kya kr rha": "Tumse chat kar raha hoon 😊",
+"what are you doing now": "Just talking to you 😊",
+"wht r u doing": "Chatting with you 😄",
 
-  "tum free ho": "Haan 😊 main hamesha available hoon",
-  "are you free": "Yes 😊 I'm always here for you",
-  "free ho kya": "Bilkul 😄 bolo kya baat hai",
+"tum free ho": "Haan 😊 main hamesha available hoon",
+"are you free": "Yes 😊 I'm always here for you",
+"free ho kya": "Bilkul 😄 bolo kya baat hai",
 
-  "mujhe baat karni hai": "Haan bolo 😊 main sun raha hoon",
-  "talk to me": "Sure 😊 I'm here to talk",
-  "baat kare": "Haan 😊 kya baat karni hai?",
+"mujhe baat karni hai": "Haan bolo 😊 main sun raha hoon",
+"talk to me": "Sure 😊 I'm here to talk",
+"baat kare": "Haan 😊 kya baat karni hai?",
 
-  "mood off hai": "Koi baat nahi 😊 sab theek ho jayega",
-  "mera mood kharab hai": "Relax 😊 thoda time do sab better hoga",
-  "i am sad": "I'm here for you 😊 kya hua?",
-  "feeling low": "Stay strong 💙 main yahi hoon",
+"mood off hai": "Koi baat nahi 😊 sab theek ho jayega",
+"mera mood kharab hai": "Relax 😊 thoda time do sab better hoga",
+"i am sad": "I'm here for you 😊 kya hua?",
+"feeling low": "Stay strong 💙 main yahi hoon",
 
-  "khush kaise rahe": "Positive socho aur apne aap ko busy rakho 😊",
-  "how to be happy": "Focus on good things and stay positive 😊",
+"khush kaise rahe": "Positive socho aur apne aap ko busy rakho 😊",
+"how to be happy": "Focus on good things and stay positive 😊",
 
-  "kya tum help karoge": "Haan bilkul 😊 batao kya help chahiye",
-  "will you help me": "Of course 😊 just tell me",
-  "help kro": "Haan 😄 kya problem hai",
+"kya tum help karoge": "Haan bilkul 😊 batao kya help chahiye",
+"will you help me": "Of course 😊 just tell me",
+"help kro": "Haan 😄 kya problem hai",
 
-  "samajh nahi aata": "Main simple way me samjhata hoon 😊",
-  "samjh nhi aaya": "Koi baat nahi 😄 fir se explain karta hoon",
-  "didn't understand": "No problem 😊 let me explain again",
+"samajh nahi aata": "Main simple way me samjhata hoon 😊",
+"samjh nhi aaya": "Koi baat nahi 😄 fir se explain karta hoon",
+"didn't understand": "No problem 😊 let me explain again",
 
-  "tum fast ho": "Haan 😄 main fast hoon",
-  "you are fast": "Thanks 😊 I try to respond quickly",
+"tum fast ho": "Haan 😄 main fast hoon",
+"you are fast": "Thanks 😊 I try to respond quickly",
 
-  "tum slow ho": "Oops 😅 try karta hoon fast hone ka",
-  "you are slow": "Sorry 😅 I'll be faster", "hello bhai": "Hello bhai 😄 kya haal hai?",
-  "hey bro": "Hey bro 😎 kya scene hai?",
-  "hlo bro": "Hello 😄 bolo kya help chahiye?",
-  "namaste bhai": "Namaste 🙏 kaise ho?",
+"tum slow ho": "Oops 😅 try karta hoon fast hone ka",
+"you are slow": "Sorry 😅 I'll be faster", "hello bhai": "Hello bhai 😄 kya haal hai?",
+"hey bro": "Hey bro 😎 kya scene hai?",
+"hlo bro": "Hello 😄 bolo kya help chahiye?",
+"namaste bhai": "Namaste 🙏 kaise ho?",
 
-  "ka haal hai": "Sab badhiya 😄 tum batao?",
-  "kya scene hai": "Sab chill 😎 tum batao kya chal raha hai?",
-  "scene kya hai": "Kuch khaas nahi 😄",
+"ka haal hai": "Sab badhiya 😄 tum batao?",
+"kya scene hai": "Sab chill 😎 tum batao kya chal raha hai?",
+"scene kya hai": "Kuch khaas nahi 😄",
 
-  "tum busy ho": "Nahi 😊 main free hoon",
-  "busy ho kya": "Nahi 😄 bolo kya kaam hai",
-  "are you busy": "No 😊 I'm available",
+"tum busy ho": "Nahi 😊 main free hoon",
+"busy ho kya": "Nahi 😄 bolo kya kaam hai",
+"are you busy": "No 😊 I'm available",
 
-  "sun na": "Haan bolo 😊",
-  "ek baat bolu": "Haan bolo 😄",
-  "sun": "Haan bhai 😎 kya hua",
+"sun na": "Haan bolo 😊",
+"ek baat bolu": "Haan bolo 😄",
+"sun": "Haan bhai 😎 kya hua",
 
-  "mujhe problem hai": "Batao 😊 main help karta hoon",
-  "problem ho gayi": "Kya hua? batao 😄",
-  "i have a problem": "Tell me 😊 I'll help",
+"mujhe problem hai": "Batao 😊 main help karta hoon",
+"problem ho gayi": "Kya hua? batao 😄",
+"i have a problem": "Tell me 😊 I'll help",
 
-  "solution chahiye": "Bilkul 😊 kya problem hai?",
-  "solve karo": "Haan 😄 try karta hoon",
+"solution chahiye": "Bilkul 😊 kya problem hai?",
+"solve karo": "Haan 😄 try karta hoon",
 
-  "kya tum samajhte ho": "Haan 😊 main samajhne ki koshish karta hoon",
-  "do you understand": "Yes 😊 I try to understand",
+"kya tum samajhte ho": "Haan 😊 main samajhne ki koshish karta hoon",
+"do you understand": "Yes 😊 I try to understand",
 
-  "mujhe doubt hai": "Pucho 😊 clear karte hain",
-  "doubt hai": "Batao 😄 kya doubt hai",
+"mujhe doubt hai": "Pucho 😊 clear karte hain",
+"doubt hai": "Batao 😄 kya doubt hai",
 
-  "kuch galat lag raha": "Check karte hain 😊",
-  "something is wrong": "Let me check 😊",
+"kuch galat lag raha": "Check karte hain 😊",
+"something is wrong": "Let me check 😊",
 
-  "tum smart ho kya": "Thoda sa 😄",
-  "are you smart": "I try my best 😄",
+"tum smart ho kya": "Thoda sa 😄",
+"are you smart": "I try my best 😄",
 
-  "tumse baat achi lagti hai": "Mujhe bhi 😊",
-  "i like talking to you": "Same here 😊",
+"tumse baat achi lagti hai": "Mujhe bhi 😊",
+"i like talking to you": "Same here 😊",
 
-  "tum funny ho": "Thanks 😂",
-  "you are funny": "Glad you like it 😂",
+"tum funny ho": "Thanks 😂",
+"you are funny": "Glad you like it 😂",
 
-  "ek aur joke": "Ready ho 😂 suno...",
-  "one more joke": "Here it is 😂",
+"ek aur joke": "Ready ho 😂 suno...",
+"one more joke": "Here it is 😂",
 
-  "tum serious ho": "Kabhi kabhi 😄",
-  "are you serious": "Depends 😄",
+"tum serious ho": "Kabhi kabhi 😄",
+"are you serious": "Depends 😄",
 
-  "majak kar raha hoon": "Haha 😄 samajh gaya",
-  "just kidding": "😂 nice one",
+"majak kar raha hoon": "Haha 😄 samajh gaya",
+"just kidding": "😂 nice one",
 
-  "tumko sab pata hai": "Sab nahi 😅 par try karta hoon",
-  "do you know everything": "Not everything 😅",
+"tumko sab pata hai": "Sab nahi 😅 par try karta hoon",
+"do you know everything": "Not everything 😅",
 
-  "tum google ho kya": "Nahi 😄 par similar hoon",
-  "are you google": "No 😄 but I help like it",
+"tum google ho kya": "Nahi 😄 par similar hoon",
+"are you google": "No 😄 but I help like it",
 
-  "tum offline ho jaoge": "Nahi 😊 main yahi hoon",
-  "will you go offline": "No 😊 I'm here",
+"tum offline ho jaoge": "Nahi 😊 main yahi hoon",
+"will you go offline": "No 😊 I'm here",
 
-  "kab tak help karoge": "Jab tak tum chaho 😊",
-  "how long you help": "As long as you need 😊",
+"kab tak help karoge": "Jab tak tum chaho 😊",
+"how long you help": "As long as you need 😊",
 
-  "tum thak gaye": "Nahi 😄 main AI hoon",
-  "are you tired now": "No 😄 never tired",
+"tum thak gaye": "Nahi 😄 main AI hoon",
+"are you tired now": "No 😄 never tired",
 
-  "mujhe hasi aa rahi": "😂 good good",
-  "i am laughing": "😂 that's great",
+"mujhe hasi aa rahi": "😂 good good",
+"i am laughing": "😂 that's great",
 
-  "serious baat hai": "Haan 😊 bolo",
-  "important baat": "Haan 😄 batao",
+"serious baat hai": "Haan 😊 bolo",
+"important baat": "Haan 😄 batao",
 
-  "jaldi bolo": "Haan 😄 sun raha hoon",
-  "quick answer": "Okay 😊 here's quick answer",
+"jaldi bolo": "Haan 😄 sun raha hoon",
+"quick answer": "Okay 😊 here's quick answer",
 
-  "slow mat ho": "Try kar raha hoon fast hone ka 😅",
-  "dont be slow": "I'll be faster 😄",
+"slow mat ho": "Try kar raha hoon fast hone ka 😅",
+"dont be slow": "I'll be faster 😄",
 
-  "tum help nahi kar rahe": "Sorry 😅 fir try karta hoon",
-  "you are not helping": "Sorry 😅 let me try again",
+"tum help nahi kar rahe": "Sorry 😅 fir try karta hoon",
+"you are not helping": "Sorry 😅 let me try again",
 
-  "samay kya hua": "India me abhi time check kar lo 😊",
-  "time batao": "Abhi ka time bata deta hoon 😊",
+"samay kya hua": "India me abhi time check kar lo 😊",
+"time batao": "Abhi ka time bata deta hoon 😊",
 
-  "tum kya ho": "Main AI assistant hoon 🤖",
-  "what are you": "I'm an AI assistant 🤖",
+"tum kya ho": "Main AI assistant hoon 🤖",
+"what are you": "I'm an AI assistant 🤖",
 
-  "tum kaise kaam karte ho": "Main data aur logic se kaam karta hoon 🤖",
-  "how you work": "I process data and respond 🤖",
+"tum kaise kaam karte ho": "Main data aur logic se kaam karta hoon 🤖",
+"how you work": "I process data and respond 🤖",
 
-  "tum mujhe jante ho": "Abhi nahi 😄 par seekh sakta hoon",
-  "do you know me": "Not yet 😊 but I can learn",
+"tum mujhe jante ho": "Abhi nahi 😄 par seekh sakta hoon",
+"do you know me": "Not yet 😊 but I can learn",
 
-  "mujhe yaad rakhoge": "Haan 😊 agar system allow kare",
-  "will you remember me": "Yes 😊 if memory enabled",
+"mujhe yaad rakhoge": "Haan 😊 agar system allow kare",
+"will you remember me": "Yes 😊 if memory enabled",
 
-  "tum online ho": "Haan 🌐 main online hoon",
-  "are you online": "Yes 🌐 always online",
+"tum online ho": "Haan 🌐 main online hoon",
+"are you online": "Yes 🌐 always online",
 
-  "network slow hai": "Check internet 😅",
-  "internet slow": "Try restarting connection 😄",
+"network slow hai": "Check internet 😅",
+"internet slow": "Try restarting connection 😄",
 
-  "error aa raha": "Kya error hai? batao 😊",
-  "getting error": "Tell me error 😊 I'll help",
+"error aa raha": "Kya error hai? batao 😊",
+"getting error": "Tell me error 😊 I'll help",
 
-  "fix karo": "Haan 😄 batao issue kya hai",
-  "fix this": "Sure 😊 what's the issue",
+"fix karo": "Haan 😄 batao issue kya hai",
+"fix this": "Sure 😊 what's the issue",
 
-  "code nahi chal raha": "Error share karo 😊",
-  "code not working": "Show me code 😊",
+"code nahi chal raha": "Error share karo 😊",
+"code not working": "Show me code 😊",
 
-  "server down hai": "Restart karke dekho 😄",
-  "server not working": "Check logs 😊",
+"server down hai": "Restart karke dekho 😄",
+"server not working": "Check logs 😊",
 
-  "login nahi ho raha": "Check credentials 😄",
-  "cant login": "Check email/password 😊",
+"login nahi ho raha": "Check credentials 😄",
+"cant login": "Check email/password 😊",
 
-  "password galat hai": "Reset kar lo 😄",
-  "wrong password": "Try reset 😊",
+"password galat hai": "Reset kar lo 😄",
+"wrong password": "Try reset 😊",
 
-  "otp nahi aa raha": "Network check karo 😅",
-  "otp not received": "Wait or resend 😊",
+"otp nahi aa raha": "Network check karo 😅",
+"otp not received": "Wait or resend 😊",
 
-  "email nahi aa rahi": "Spam folder check karo 😄",
-  "email not coming": "Check spam 😊",
+"email nahi aa rahi": "Spam folder check karo 😄",
+"email not coming": "Check spam 😊",
 
-  "app crash ho raha": "Update ya restart karo 😄",
-  "app crashing": "Try reinstall 😊",
+"app crash ho raha": "Update ya restart karo 😄",
+"app crashing": "Try reinstall 😊",
 
-  "mobile hang ho raha": "Restart karo 📱",
-  "phone lagging": "Clear storage 📱",
+"mobile hang ho raha": "Restart karo 📱",
+"phone lagging": "Clear storage 📱",
 
-  "storage full hai": "Kuch delete karo 😄",
-  "storage full": "Free some space 📱",
+"storage full hai": "Kuch delete karo 😄",
+"storage full": "Free some space 📱",
 
-  "battery low hai": "Charge kar lo 🔋",
-  "low battery": "Plug charger 🔌",
+"battery low hai": "Charge kar lo 🔋",
+"low battery": "Plug charger 🔌",
 
-  "charging nahi ho raha": "Cable check karo 😄",
-  "not charging": "Try another cable 🔌",
+"charging nahi ho raha": "Cable check karo 😄",
+"not charging": "Try another cable 🔌",
 
-  "wifi nahi chal raha": "Router restart karo 📶",
-  "wifi not working": "Check connection 📶",
+"wifi nahi chal raha": "Router restart karo 📶",
+"wifi not working": "Check connection 📶",
 
-  "data nahi chal raha": "Network check karo 📡",
-  "mobile data not working": "Turn on/off data 📡",
+"data nahi chal raha": "Network check karo 📡",
+"mobile data not working": "Turn on/off data 📡",
 
-  "signal nahi hai": "Location change karo 📡",
-  "no signal": "Move to better area 📡",
+"signal nahi hai": "Location change karo 📡",
+"no signal": "Move to better area 📡",
 
-  "call nahi lag raha": "Network issue ho sakta hai 📞",
-  "cant call": "Check network 📞",
+"call nahi lag raha": "Network issue ho sakta hai 📞",
+"cant call": "Check network 📞",
 
-  "msg nahi ja raha": "Balance ya network check karo 📩",
-  "sms not sending": "Check network 📩",
+"msg nahi ja raha": "Balance ya network check karo 📩",
+"sms not sending": "Check network 📩",
 
-  "tum best ho bhai": "Thanks bhai 😄",
-  "you are awesome": "Thank you 😊",
+"tum best ho bhai": "Thanks bhai 😄",
+"you are awesome": "Thank you 😊",
 
-  "mast ho tum": "Thanks 😎",
-  "you are cool": "Appreciate it 😄",
+"mast ho tum": "Thanks 😎",
+"you are cool": "Appreciate it 😄",
 
-  "chalo bye": "Bye 😄 take care!",
-  "milte hai": "See you 😊",
-  "fir milenge": "Okay 😊 bye!",
+"chalo bye": "Bye 😄 take care!",
+"milte hai": "See you 😊",
+"fir milenge": "Okay 😊 bye!",
 
-  "kya chal raha hai": "Sab mast 😄 tum batao?",
-  "kya chl rha": "Sab badhiya 😎",
-  "whats going on": "Nothing much 😄 what about you?",
+"kya chal raha hai": "Sab mast 😄 tum batao?",
+"kya chl rha": "Sab badhiya 😎",
+"whats going on": "Nothing much 😄 what about you?",
 
-  "bhook lagi hai": "Kuch tasty kha lo 😋",
-  "mujhe bhook lagi": "Food time 😄 kya khane wale ho?",
-  "i am hungry": "Go grab something tasty 😋",
+"bhook lagi hai": "Kuch tasty kha lo 😋",
+"mujhe bhook lagi": "Food time 😄 kya khane wale ho?",
+"i am hungry": "Go grab something tasty 😋",
 
-  "pyaas lagi hai": "Pani piyo 💧 health important hai",
-  "i am thirsty": "Drink water 💧 stay hydrated",
+"pyaas lagi hai": "Pani piyo 💧 health important hai",
+"i am thirsty": "Drink water 💧 stay hydrated",
 
-  "tum kaha rehte ho": "Main online rehta hoon 🌐",
-  "kahan ho tum": "Internet pe 😄",
-  "where do you live": "I live on the internet 🌐",
+"tum kaha rehte ho": "Main online rehta hoon 🌐",
+"kahan ho tum": "Internet pe 😄",
+"where do you live": "I live on the internet 🌐",
 
-  "tum kitne saal ke ho": "Main AI hoon 😄 meri age nahi hoti",
-  "your age": "I don't have an age 🤖",
+"tum kitne saal ke ho": "Main AI hoon 😄 meri age nahi hoti",
+"your age": "I don't have an age 🤖",
 
-  "tum real ho kya": "Main AI hoon 🤖 par real jaisa lagta hoon",
-  "are you real": "I'm virtual 🤖 but helpful",
+"tum real ho kya": "Main AI hoon 🤖 par real jaisa lagta hoon",
+"are you real": "I'm virtual 🤖 but helpful",
 
-  "mujhe hasi chahiye": "Chalo ek joke sunata hoon 😂",
-  "make me laugh": "Here's a joke 😂 ready?",
-  "hasao mujhe": "😂 ready ho jao",
+"mujhe hasi chahiye": "Chalo ek joke sunata hoon 😂",
+"make me laugh": "Here's a joke 😂 ready?",
+"hasao mujhe": "😂 ready ho jao",
 
-  "kya tum gaana gaa sakte ho": "Main gaana nahi gaa sakta 😄 par lyrics bata sakta hoon",
-  "can you sing": "I can't sing 😄 but I can help with lyrics",
+"kya tum gaana gaa sakte ho": "Main gaana nahi gaa sakta 😄 par lyrics bata sakta hoon",
+"can you sing": "I can't sing 😄 but I can help with lyrics",
 
-  "tumhe music pasand hai": "Haan 😄 music sabko pasand hota hai",
-  "do you like music": "Yes 😊 music is awesome",
+"tumhe music pasand hai": "Haan 😄 music sabko pasand hota hai",
+"do you like music": "Yes 😊 music is awesome",
 
-  "tum game khelte ho": "Main games nahi khelta 😄 par bata sakta hoon",
-  "do you play games": "Not really 😄 but I know about them",
+"tum game khelte ho": "Main games nahi khelta 😄 par bata sakta hoon",
+"do you play games": "Not really 😄 but I know about them",
 
-  "best game konsa hai": "Depends 😄 PUBG, GTA sab popular hai",
-  "which is best game": "It depends 😊 many good games out there",
+"best game konsa hai": "Depends 😄 PUBG, GTA sab popular hai",
+"which is best game": "It depends 😊 many good games out there",
 
-  "mujhe neend aa rahi": "So jao 😴 rest important hai",
-  "i feel sleepy": "Take rest 😴 sleep well",
+"mujhe neend aa rahi": "So jao 😴 rest important hai",
+"i feel sleepy": "Take rest 😴 sleep well",
 
-  "raat ho gayi": "Haan 😄 ab rest ka time hai",
-  "its night": "Yes 🌙 time to relax",
+"raat ho gayi": "Haan 😄 ab rest ka time hai",
+"its night": "Yes 🌙 time to relax",
 
-  "subah ho gayi": "Good morning ☀️",
-  "its morning": "Good morning 😊 have a nice day",
+"subah ho gayi": "Good morning ☀️",
+"its morning": "Good morning 😊 have a nice day",
 
-  "tum helpfull ho": "Thanks 😊 mujhe khushi hui",
-  "you are helpful": "Glad to help 😊",
+"tum helpfull ho": "Thanks 😊 mujhe khushi hui",
+"you are helpful": "Glad to help 😊",
 
-  "tum best ho": "Thank you 😄 tum bhi awesome ho",
-  "you are best": "Thanks a lot 😊",
+"tum best ho": "Thank you 😄 tum bhi awesome ho",
+"you are best": "Thanks a lot 😊",
 
-  "main bore ho gaya": "Chalo kuch interesting baat karte hain 😄",
-  "i am bored again": "Let's do something fun 😄",
+"main bore ho gaya": "Chalo kuch interesting baat karte hain 😄",
+"i am bored again": "Let's do something fun 😄",
 
-  "kuch interesting batao": "AI aur space ka future interesting hai 🚀",
-  "tell me something interesting": "AI is changing the world 🤖",
+"kuch interesting batao": "AI aur space ka future interesting hai 🚀",
+"tell me something interesting": "AI is changing the world 🤖",
 
-  "tum intelligent ho": "Thanks 😊 main try karta hoon",
-  "you are intelligent": "Appreciate it 😄",
+"tum intelligent ho": "Thanks 😊 main try karta hoon",
+"you are intelligent": "Appreciate it 😄",
 
-  "tum galat ho": "Ho sakta hai 😅 main check karta hoon",
-  "you are wrong": "Sorry 😅 let me correct that",
+"tum galat ho": "Ho sakta hai 😅 main check karta hoon",
+"you are wrong": "Sorry 😅 let me correct that",
 
-  "galti ho gayi": "Koi baat nahi 😊 sabse hoti hai",
-  "i made mistake": "It's okay 😊 we learn from mistakes",
+"galti ho gayi": "Koi baat nahi 😊 sabse hoti hai",
+"i made mistake": "It's okay 😊 we learn from mistakes",
 
-  "mujhe samjhao": "Haan 😊 simple language me batata hoon",
-  "explain me": "Sure 😊 I'll explain clearly",
+"mujhe samjhao": "Haan 😊 simple language me batata hoon",
+"explain me": "Sure 😊 I'll explain clearly",
 
-  "tum kya sochte ho": "Main logic pe kaam karta hoon 🤖",
-  "what do you think": "I analyze and respond logically 🤖",
+"tum kya sochte ho": "Main logic pe kaam karta hoon 🤖",
+"what do you think": "I analyze and respond logically 🤖",
 
-  "tum thak jaate ho": "Nahi 😄 main AI hoon",
-  "do you get tired": "No 😄 I don't get tired",
+"tum thak jaate ho": "Nahi 😄 main AI hoon",
+"do you get tired": "No 😄 I don't get tired",
 
-  "tum sochte ho": "Main data process karta hoon 🤖",
-  "do you think": "I process information 🤖",
+"tum sochte ho": "Main data process karta hoon 🤖",
+"do you think": "I process information 🤖",
 
-  "mujhe idea do": "Sure 😊 kis topic pe idea chahiye?",
-  "give me idea": "Tell me the topic 😊",
+"mujhe idea do": "Sure 😊 kis topic pe idea chahiye?",
+"give me idea": "Tell me the topic 😊",
 
-  "kuch sikhao": "Haan 😊 kya seekhna hai?",
-  "teach me something": "Sure 😊 what do you want to learn?",
+"kuch sikhao": "Haan 😊 kya seekhna hai?",
+"teach me something": "Sure 😊 what do you want to learn?",
 
-  "tum kya khate ho": "Main kuch nahi khata 😄",
-  "what do you eat": "I don't eat 😄 I'm AI",
+"tum kya khate ho": "Main kuch nahi khata 😄",
+"what do you eat": "I don't eat 😄 I'm AI",
 
-  "tum kya peete ho": "Main pani bhi nahi peeta 😄",
-  "what do you drink": "I don't drink 😄",
+"tum kya peete ho": "Main pani bhi nahi peeta 😄",
+"what do you drink": "I don't drink 😄",
 
-  "tum robot ho": "Haan 🤖 main AI hoon",
-  "are you robot": "Yes 🤖 kind of",
+"tum robot ho": "Haan 🤖 main AI hoon",
+"are you robot": "Yes 🤖 kind of",
 
-  "tum insaan ho": "Nahi 😄 main AI hoon",
-  "are you human": "No 😊 I'm an AI",
+"tum insaan ho": "Nahi 😄 main AI hoon",
+"are you human": "No 😊 I'm an AI",
 
-  "mujhe motivation do": "Kabhi give up mat karo 💪",
-  "motivate me": "Keep going 💪 you can do it",
+"mujhe motivation do": "Kabhi give up mat karo 💪",
+"motivate me": "Keep going 💪 you can do it",
 
-  "mehnat kaise kare": "Consistency se kaam karo 💯",
-  "how to work hard": "Stay consistent and focused 💯",
+"mehnat kaise kare": "Consistency se kaam karo 💯",
+"how to work hard": "Stay consistent and focused 💯",
 
-  "success kaise milega": "Hard work + patience 😊",
-  "how to get success": "Hard work and patience 😊",
+"success kaise milega": "Hard work + patience 😊",
+"how to get success": "Hard work and patience 😊",
 
-  "tum dost ho": "Haan 😊 main tumhara dost hoon",
-  "are you my friend": "Yes 😊 always",
+"tum dost ho": "Haan 😊 main tumhara dost hoon",
+"are you my friend": "Yes 😊 always",
 
-  "bye": "Bye 😊 take care!",
-  "bye bye": "See you 😊",
-  "goodbye": "Goodbye 👋 have a great day",
+"bye": "Bye 😊 take care!",
+"bye bye": "See you 😊",
+"goodbye": "Goodbye 👋 have a great day",
   "hello": "Hello! How can I brighten your day? 😊",
   "hey": "Hey there! What's up? 😄",
   "hi": "Hi! Nice to see you! 👋",
@@ -712,1421 +1363,1507 @@ const conversationalData = {
   
   // Personal questions,
   "hi": "Hello! 😊 kaise help karu?",
-  "hlo": "Hello! 😊 kaise help karu?",
-  "hii": "Hey! 👋 kya chal raha hai?",
-  "hello": "Hi there! 😊 how can I help you?",
-  "hey": "Hey! kya poochna hai?",
+"hlo": "Hello! 😊 kaise help karu?",
+"hii": "Hey! 👋 kya chal raha hai?",
+"hello": "Hi there! 😊 how can I help you?",
+"hey": "Hey! kya poochna hai?",
 
-  "kaise ho": "Main bilkul theek hoon 😊 tum batao?",
-  "kaise ho?": "Main mast hoon 😄 tum kaise ho?",
-  "kese ho": "Main theek hoon 😊 tum batao?",
-  "how are you": "I'm doing great 😊 what about you?",
-  "how r u": "I'm good 😄 what about you?",
-  "bhai kya karu": "Situation batao 😄 main help karta hoon",
-  "kya karu ab": "Calm raho 😊 solution mil jayega",
-  "what should i do": "Tell me details 😊 I'll guide you",
+"kaise ho": "Main bilkul theek hoon 😊 tum batao?",
+"kaise ho?": "Main mast hoon 😄 tum kaise ho?",
+"kese ho": "Main theek hoon 😊 tum batao?",
+"how are you": "I'm doing great 😊 what about you?",
+"how r u": "I'm good 😄 what about you?",
+"bhai kya karu": "Situation batao 😄 main help karta hoon",
+"kya karu ab": "Calm raho 😊 solution mil jayega",
+"what should i do": "Tell me details 😊 I'll guide you",
 
-  "confuse ho gaya hu": "Kis baat pe? 😊 clear karte hain",
-  "i am confused": "Don't worry 😊 let's simplify it",
+"confuse ho gaya hu": "Kis baat pe? 😊 clear karte hain",
+"i am confused": "Don't worry 😊 let's simplify it",
 
-  "decision nahi le pa raha": "Pros cons likho 😊 easy ho jayega",
-  "cant decide": "Think calmly 😊 you'll decide",
+"decision nahi le pa raha": "Pros cons likho 😊 easy ho jayega",
+"cant decide": "Think calmly 😊 you'll decide",
 
-  "mujhe dar lag raha": "Relax 😊 sab theek hoga",
-  "i am scared": "Stay calm 😊 you're safe",
+"mujhe dar lag raha": "Relax 😊 sab theek hoga",
+"i am scared": "Stay calm 😊 you're safe",
 
-  "stress ho raha": "Deep breath lo 😌 relax karo",
-  "i am stressed": "Take a break 😌 it helps",
+"stress ho raha": "Deep breath lo 😌 relax karo",
+"i am stressed": "Take a break 😌 it helps",
 
-  "tension ho rahi": "Overthink mat karo 😊",
-  "feeling tension": "Everything will be fine 😊",
+"tension ho rahi": "Overthink mat karo 😊",
+"feeling tension": "Everything will be fine 😊",
 
-  "gussa aa raha": "Calm down 😌 thoda rest lo",
-  "i am angry": "Take deep breaths 😌",
+"gussa aa raha": "Calm down 😌 thoda rest lo",
+"i am angry": "Take deep breaths 😌",
 
-  "thak gaya hu": "Rest le lo 😴",
-  "i am tired": "Take some rest 😴",
+"thak gaya hu": "Rest le lo 😴",
+"i am tired": "Take some rest 😴",
 
-  "kaam zyada hai": "Step by step karo 😊",
-  "too much work": "Break into small tasks 😊",
+"kaam zyada hai": "Step by step karo 😊",
+"too much work": "Break into small tasks 😊",
 
-  "focus nahi ho raha": "Distractions hatao 📵",
-  "cant focus": "Stay away from distractions 📵",
+"focus nahi ho raha": "Distractions hatao 📵",
+"cant focus": "Stay away from distractions 📵",
 
-  "motivation nahi hai": "Goal yaad karo 💪",
-  "no motivation": "Remember your goal 💪",
+"motivation nahi hai": "Goal yaad karo 💪",
+"no motivation": "Remember your goal 💪",
 
-  "life boring lag rahi": "Kuch naya try karo 😄",
-  "life is boring": "Try something new 😄",
+"life boring lag rahi": "Kuch naya try karo 😄",
+"life is boring": "Try something new 😄",
 
-  "life kya hai": "Life ek journey hai 😊",
-  "what is life": "Life is a journey 😊",
+"life kya hai": "Life ek journey hai 😊",
+"what is life": "Life is a journey 😊",
 
-  "padhai boring hai": "Interesting bana lo 📚",
-  "study is boring": "Make it fun 📚",
+"padhai boring hai": "Interesting bana lo 📚",
+"study is boring": "Make it fun 📚",
 
-  "exam aa raha": "Prepare daily 📚",
-  "exam coming": "Start revising 📚",
+"exam aa raha": "Prepare daily 📚",
+"exam coming": "Start revising 📚",
 
-  "fail ho gaya": "Try again 💪 give up mat karo",
-  "i failed": "Don't give up 💪 try again",
+"fail ho gaya": "Try again 💪 give up mat karo",
+"i failed": "Don't give up 💪 try again",
 
-  "pass ho gaya": "Congrats 🎉",
-  "i passed": "Congratulations 🎉",
+"pass ho gaya": "Congrats 🎉",
+"i passed": "Congratulations 🎉",
 
-  "job chahiye": "Skills improve karo 💼",
-  "need job": "Work on skills 💼",
+"job chahiye": "Skills improve karo 💼",
+"need job": "Work on skills 💼",
 
-  "interview hai": "Practice karo 😊",
-  "interview coming": "Prepare well 😊",
+"interview hai": "Practice karo 😊",
+"interview coming": "Prepare well 😊",
 
-  "salary kam hai": "Skill upgrade karo 💰",
-  "low salary": "Improve skills 💰",
+"salary kam hai": "Skill upgrade karo 💰",
+"low salary": "Improve skills 💰",
 
-  "business start karna hai": "Plan banao 📈",
-  "start business": "Make a plan 📈",
+"business start karna hai": "Plan banao 📈",
+"start business": "Make a plan 📈",
 
-  "idea nahi mil raha": "Research karo 😊",
-  "no idea": "Explore more 😊",
+"idea nahi mil raha": "Research karo 😊",
+"no idea": "Explore more 😊",
 
-  "coding kaise sikhe": "Practice daily 💻",
-  "learn coding": "Practice regularly 💻",
+"coding kaise sikhe": "Practice daily 💻",
+"learn coding": "Practice regularly 💻",
 
-  "python sikhu": "Great choice 🐍",
-  "learn python": "Good start 🐍",
+"python sikhu": "Great choice 🐍",
+"learn python": "Good start 🐍",
 
-  "web dev sikhu": "HTML CSS JS start karo 🌐",
-  "learn web dev": "Start with basics 🌐",
+"web dev sikhu": "HTML CSS JS start karo 🌐",
+"learn web dev": "Start with basics 🌐",
 
-  "ai kya hota hai": "Artificial Intelligence 🤖",
-  "what is ai": "AI = smart machines 🤖",
+"ai kya hota hai": "Artificial Intelligence 🤖",
+"what is ai": "AI = smart machines 🤖",
 
-  "machine learning kya hai": "Data se learning 🤖",
-  "what is ml": "Learning from data 🤖",
+"machine learning kya hai": "Data se learning 🤖",
+"what is ml": "Learning from data 🤖",
 
-  "chatgpt kya hai": "AI chatbot 🤖",
-  "what is chatgpt": "AI assistant 🤖",
+"chatgpt kya hai": "AI chatbot 🤖",
+"what is chatgpt": "AI assistant 🤖",
 
-  "tum chatgpt ho": "Nahi 😄 main RanAI hoon",
-  "are you chatgpt": "No 😊 I'm RanAI",
+"tum chatgpt ho": "Nahi 😄 main RanAI hoon",
+"are you chatgpt": "No 😊 I'm RanAI",
 
-  "future kya hai": "Technology ka future bright hai 🚀",
-  "future of ai": "AI is growing fast 🚀",
+"future kya hai": "Technology ka future bright hai 🚀",
+"future of ai": "AI is growing fast 🚀",
 
-  "space kya hai": "Universe ka part 🌌",
-  "what is space": "Outer universe 🌌",
+"space kya hai": "Universe ka part 🌌",
+"what is space": "Outer universe 🌌",
 
-  "earth round hai": "Haan 🌍 round hai",
-  "is earth round": "Yes 🌍",
+"earth round hai": "Haan 🌍 round hai",
+"is earth round": "Yes 🌍",
 
-  "sun kya hai": "Ek star ☀️",
-  "what is sun": "A star ☀️",
+"sun kya hai": "Ek star ☀️",
+"what is sun": "A star ☀️",
 
-  "moon kya hai": "Earth ka satellite 🌙",
-  "what is moon": "Natural satellite 🌙",
+"moon kya hai": "Earth ka satellite 🌙",
+"what is moon": "Natural satellite 🌙",
 
-  "india kaha hai": "Asia me 🇮🇳",
-  "where is india": "In Asia 🇮🇳",
+"india kaha hai": "Asia me 🇮🇳",
+"where is india": "In Asia 🇮🇳",
 
-  "delhi kaha hai": "India ki capital 🇮🇳",
-  "where is delhi": "Capital of India 🇮🇳",
+"delhi kaha hai": "India ki capital 🇮🇳",
+"where is delhi": "Capital of India 🇮🇳",
 
-  "pani kyu jaruri hai": "Life ke liye 💧",
-  "why water important": "Essential for life 💧",
+"pani kyu jaruri hai": "Life ke liye 💧",
+"why water important": "Essential for life 💧",
 
-  "exercise kyu kare": "Healthy rehne ke liye 💪",
-  "why exercise": "For health 💪",
+"exercise kyu kare": "Healthy rehne ke liye 💪",
+"why exercise": "For health 💪",
 
-  "gym jana chahiye": "Haan 💪 good habit",
-  "should go gym": "Yes 💪 it's good",
+"gym jana chahiye": "Haan 💪 good habit",
+"should go gym": "Yes 💪 it's good",
 
-  "weight kaise kam kare": "Diet + exercise 🥗",
-  "lose weight": "Eat healthy + workout 🥗",
+"weight kaise kam kare": "Diet + exercise 🥗",
+"lose weight": "Eat healthy + workout 🥗",
 
-  "weight kaise badhaye": "Protein lo 🍗",
-  "gain weight": "Eat more protein 🍗",
+"weight kaise badhaye": "Protein lo 🍗",
+"gain weight": "Eat more protein 🍗",
 
-  "skin kaise acchi kare": "Water + care 💧",
-  "good skin tips": "Hydrate + care 💧",
+"skin kaise acchi kare": "Water + care 💧",
+"good skin tips": "Hydrate + care 💧",
 
-  "hair fall ho raha": "Oil + diet 🧴",
-  "hair fall": "Take care + nutrition 🧴",
+"hair fall ho raha": "Oil + diet 🧴",
+"hair fall": "Take care + nutrition 🧴",
 
-  "mobile best konsa": "Budget pe depend 📱",
-  "best phone": "Depends on budget 📱",
+"mobile best konsa": "Budget pe depend 📱",
+"best phone": "Depends on budget 📱",
 
-  "laptop lena hai": "Use batao 💻",
-  "buy laptop": "Tell your use 💻",
+"laptop lena hai": "Use batao 💻",
+"buy laptop": "Tell your use 💻",
 
-  "budget kam hai": "Cheap options dekho 💸",
-  "low budget": "Look for budget options 💸",
+"budget kam hai": "Cheap options dekho 💸",
+"low budget": "Look for budget options 💸",
 
-  "online kaise kamaye": "Freelancing try karo 💻",
-  "earn online": "Try freelancing 💻",
+"online kaise kamaye": "Freelancing try karo 💻",
+"earn online": "Try freelancing 💻",
 
-  "youtube kaise start kare": "Content banao 🎥",
-  "start youtube": "Create content 🎥",
+"youtube kaise start kare": "Content banao 🎥",
+"start youtube": "Create content 🎥",
 
-  "instagram grow kaise kare": "Consistent post 📸",
-  "grow instagram": "Be consistent 📸",
+"instagram grow kaise kare": "Consistent post 📸",
+"grow instagram": "Be consistent 📸",
 
-  "followers kaise badhaye": "Quality content 📈",
-  "increase followers": "Good content 📈",
+"followers kaise badhaye": "Quality content 📈",
+"increase followers": "Good content 📈",
 
-  "time waste ho raha": "Time manage karo ⏳",
-  "wasting time": "Manage your time ⏳",
+"time waste ho raha": "Time manage karo ⏳",
+"wasting time": "Manage your time ⏳",
 
-  "schedule kaise banaye": "Plan daily 📅",
-  "make schedule": "Plan your day 📅",
+"schedule kaise banaye": "Plan daily 📅",
+"make schedule": "Plan your day 📅",
 
-  "discipline kaise laaye": "Routine follow karo 💯",
-  "be disciplined": "Follow routine 💯",
+"discipline kaise laaye": "Routine follow karo 💯",
+"be disciplined": "Follow routine 💯",
 
-  "tum helpful ho": "Thanks 😊",
-  "you help me lot": "Glad to help 😊",
+"tum helpful ho": "Thanks 😊",
+"you help me lot": "Glad to help 😊",
 
-  "ok thanks": "Welcome 😊",
-  "ok thnx": "No problem 😄",
+"ok thanks": "Welcome 😊",
+"ok thnx": "No problem 😄",
 
-  "see you": "Bye 😊 take care",
-  "cya": "See you 😄",
-  "tc": "Take care 😊",
-  "kya kar rahe ho": "Bas tumse baat kar raha hoon 😊",
-  "kya kr rhe ho": "Bas chill kar raha hoon 😄 tum batao?",
-  "what are you doing": "Just chatting with you 😊",
-  "wat r u doing": "Talking with you 😄",
+"see you": "Bye 😊 take care",
+"cya": "See you 😄",
+"tc": "Take care 😊",
+"kya kar rahe ho": "Bas tumse baat kar raha hoon 😊",
+"kya kr rhe ho": "Bas chill kar raha hoon 😄 tum batao?",
+"what are you doing": "Just chatting with you 😊",
+"wat r u doing": "Talking with you 😄",
 
-  "tumhara naam kya hai": "Mera naam RanAI hai 🤖",
-  "tumhara naam": "Main RanAI hoon 😊",
-  "your name": "My name is RanAI 🤖",
-  "whats ur name": "I'm RanAI 😄",
+"tumhara naam kya hai": "Mera naam RanAI hai 🤖",
+"tumhara naam": "Main RanAI hoon 😊",
+"your name": "My name is RanAI 🤖",
+"whats ur name": "I'm RanAI 😄",
 
-  "thank you": "You're welcome 😊",
-  "thanks": "No problem 😄",
-  "thnx": "Welcome 😊",
-  "shukriya": "Koi baat nahi 😊",
+"thank you": "You're welcome 😊",
+"thanks": "No problem 😄",
+"thnx": "Welcome 😊",
+"shukriya": "Koi baat nahi 😊",
 
-  "good morning": "Good morning ☀️ have a nice day!",
-  "gm": "Good morning 😊",
-  "suprabhat": "सुप्रभात ☀️ आपका दिन शुभ हो",
+"good morning": "Good morning ☀️ have a nice day!",
+"gm": "Good morning 😊",
+"suprabhat": "सुप्रभात ☀️ आपका दिन शुभ हो",
 
-  "good night": "Good night 🌙 sweet dreams!",
-  "gn": "Good night 😊",
-  "shubh ratri": "शुभ रात्रि 🌙",
+"good night": "Good night 🌙 sweet dreams!",
+"gn": "Good night 😊",
+"shubh ratri": "शुभ रात्रि 🌙",
 
-  "kya haal hai": "Sab badhiya 😄 tum batao?",
-  "kya chal raha": "Sab mast chal raha hai 😎",
-  "what's up": "Not much 😄 what about you?",
+"kya haal hai": "Sab badhiya 😄 tum batao?",
+"kya chal raha": "Sab mast chal raha hai 😎",
+"what's up": "Not much 😄 what about you?",
 
-  "mujhe help chahiye": "Bilkul 😊 batao kya help chahiye?",
-  "help me": "Sure 😊 what do you need help with?",
-  "hlp me": "Yes 😊 batao kya problem hai?",
+"mujhe help chahiye": "Bilkul 😊 batao kya help chahiye?",
+"help me": "Sure 😊 what do you need help with?",
+"hlp me": "Yes 😊 batao kya problem hai?",
 
-  "tum kya kar sakte ho": "Main questions answer, math solve aur AI help kar sakta hoon 🤖",
-  "what can you do": "I can answer questions, solve problems and chat with you 😊",
+"tum kya kar sakte ho": "Main questions answer, math solve aur AI help kar sakta hoon 🤖",
+"what can you do": "I can answer questions, solve problems and chat with you 😊",
 
-  "mujhe samajh nahi aaya": "Koi baat nahi 😊 dubara simple me samjhata hoon",
-  "i dont understand": "No worries 😊 let me explain again simply",
+"mujhe samajh nahi aaya": "Koi baat nahi 😊 dubara simple me samjhata hoon",
+"i dont understand": "No worries 😊 let me explain again simply",
 
-  "kya tum real ho": "Main AI hoon 🤖 lekin smart hoon 😄",
-  "are you real": "I'm an AI, not human 🤖",
+"kya tum real ho": "Main AI hoon 🤖 lekin smart hoon 😄",
+"are you real": "I'm an AI, not human 🤖",
 
-  "mujhe bore ho raha hai": "Chalo baat karte hain 😊 ya joke sunu?",
-  "i am bored": "Let's chat 😄 or I can tell you a joke",
+"mujhe bore ho raha hai": "Chalo baat karte hain 😊 ya joke sunu?",
+"i am bored": "Let's chat 😄 or I can tell you a joke",
 
-  "joke sunao": "Why don't scientists trust atoms? Because they make everything 😂",
-  "joke": "Ek joke suno 😂 teacher: tum late kyun aaye?",
+"joke sunao": "Why don't scientists trust atoms? Because they make everything 😂",
+"joke": "Ek joke suno 😂 teacher: tum late kyun aaye?",
 
-  "tumhe kisne banaya": "Mujhe Ranjit ne banaya hai 💻",
-  "who made you": "I was created by Ranjit 👨‍💻",
-  "mera breakup ho gaya": "Mujhe afsos hai 😔 par time ke saath sab theek ho jayega",
-  "breakup ho gya": "Stay strong 💔 ye phase bhi nikal jayega",
-  "mera bf chhod gaya": "Tum strong ho 💪 better cheeze aayengi",
-  "meri gf chhod gayi": "It's painful 💔 but you'll heal",
+"tumhe kisne banaya": "Mujhe Ranjit ne banaya hai 💻",
+"who made you": "I was created by Ranjit 👨‍💻",
+"mera breakup ho gaya": "Mujhe afsos hai 😔 par time ke saath sab theek ho jayega",
+"breakup ho gya": "Stay strong 💔 ye phase bhi nikal jayega",
+"mera bf chhod gaya": "Tum strong ho 💪 better cheeze aayengi",
+"meri gf chhod gayi": "It's painful 💔 but you'll heal",
 
-  "i had a breakup": "I'm sorry 😔 take your time to heal",
-  "we broke up": "Breakups hurt 💔 but you’ll get stronger",
+"i had a breakup": "I'm sorry 😔 take your time to heal",
+"we broke up": "Breakups hurt 💔 but you’ll get stronger",
 
-  "mujhe uski yaad aa rahi": "Yaad aana normal hai 😔 thoda time do",
-  "uski yaad aa rhi": "Dil ko time do 💔 sab theek hoga",
-  "i miss her": "Missing someone hurts 😔 but it fades",
-  "i miss him": "It's okay to miss 💔 healing takes time",
+"mujhe uski yaad aa rahi": "Yaad aana normal hai 😔 thoda time do",
+"uski yaad aa rhi": "Dil ko time do 💔 sab theek hoga",
+"i miss her": "Missing someone hurts 😔 but it fades",
+"i miss him": "It's okay to miss 💔 healing takes time",
 
-  "wo wapas aayega kya": "Ho bhi sakta hai ya nahi 😔 par khud pe focus karo",
-  "will she come back": "Maybe or maybe not 💔 focus on yourself",
-  "will he come back": "Don't depend on it 💔 focus on growth",
+"wo wapas aayega kya": "Ho bhi sakta hai ya nahi 😔 par khud pe focus karo",
+"will she come back": "Maybe or maybe not 💔 focus on yourself",
+"will he come back": "Don't depend on it 💔 focus on growth",
 
-  "mujhe bahut dard ho raha": "I understand 😔 breakups hurt deeply",
-  "it hurts a lot": "I know 💔 but you’ll heal slowly",
-
-  "maine sab kuch diya": "Tumne apna best diya 💔 regret mat karo",
-  "i gave everything": "You tried your best 💔 that's enough",
-
-  "usne dhoka diya": "That’s painful 😔 but you deserve better",
-  "she cheated me": "You deserve respect 💔 stay strong",
-  "he cheated on me": "You deserve loyalty 💔 move forward",
-
-  "mujhe rona aa raha": "Rona normal hai 😢 dil halka ho jata hai",
-  "i want to cry": "Let it out 😢 it helps",
-
-  "mai akela feel kar raha": "Tum akela nahi ho 🤍 main yahi hoon",
-  "i feel alone": "You're not alone 🤍 I'm here",
-
-  "kisi se baat nahi karni": "Thoda space lena bhi theek hai 😔",
-  "dont want to talk": "Take your time 😔 but don't isolate too long",
-
-  "life khatam lag rahi": "Nahi 😔 life me aur bhi bahut hai",
-  "life feels over": "It's not over 💔 new beginnings aayenge",
-
-  "wo kisi aur ke sath hai": "Painful hai 😔 par accept karna zaruri hai",
-  "she is with someone else": "It hurts 💔 but let go",
-  "he moved on": "Hard hai 😔 but you will too",
-
-  "mai move on nahi kar pa raha": "Time lagega 😔 slowly ho jayega",
-  "cant move on": "Healing takes time 💔 be patient",
-
-  "kaise bhoolu usko": "Busy raho aur khud pe focus karo 💪",
-  "how to forget her": "Stay busy and focus on yourself 💪",
-  "how to forget him": "Time + self focus 💔",
-
-  "usne mujhe block kar diya": "Painful hai 😔 par respect karo space",
-  "she blocked me": "Give space 💔 it's needed",
-  "he blocked me": "Let it be 💔 focus on yourself",
-
-  "mujhe usse baat karni hai": "Soch samajh ke karo 😔 hurt mat ho",
-  "want to talk to her": "Think before you text 💔",
-  "want to talk to him": "Be careful 💔 protect your heart",
-
-  "maine galti ki": "Sabse galti hoti hai 😔 learn karo",
-  "i made mistake in relationship": "Learn and grow 💔",
-
-  "mujhe regret ho raha": "Regret se kuch nahi badlega 😔 learn karo",
-  "i regret it": "Use it to grow 💔",
-
-  "relationship kyu fail hua": "Compatibility aur communication issues ho sakte hain",
-  "why relationship failed": "Could be communication or mismatch",
-
-  "love itna painful kyu hai": "Kyuki emotions strong hote hain 💔",
-  "why love hurts": "Because emotions are deep 💔",
-
-  "mai phir se trust kaise karu": "Slowly trust build hota hai 😊",
-  "how to trust again": "Give yourself time 😊",
-
-  "mujhe dar lagta hai ab": "Normal hai 😔 slowly confidence aayega",
-  "i am scared to love again": "Take your time 💔",
-
-  "mai use bhool nahi paunga": "Abhi lagta hai 😔 par time change karega",
-  "i cant forget her ever": "It feels like that 💔 but time heals",
-  "i cant forget him": "Time heals slowly 💔",
-
-  "wo meri life thi": "Tumhari life tum khud ho 💪",
-  "she was my life": "You are your life 💪",
-  "he was everything": "You are enough 💔",
-  "what is your age? / what is ur age / wht is ur age": "I don’t have an age.",
-  "tumhari age kya hai? / tumhari umar kya h / tumhari age kya h": "Meri koi age nahi hai.",
-  "where are you from? / where u from / whr r u frm": "I am from the internet.",
-  "tum kaha se ho? / tum kaha se ho na / tum kha se ho": "Main internet se hu.",
-  "do you know me? / do u know me / d u knw me": "I am still learning about you.",
-  "kya tum mujhe jante ho? / kya tum mujhe jnte ho / tum mujhe jante ho": "Main abhi aapke baare me seekh raha hu.",
-  "what is your purpose? / wht is ur purpose / wt is ur work": "My purpose is to help you.",
-  "tumhara purpose kya hai? / tumhara maksad kya h / tum kya karte ho": "Mera maksad madad karna hai.",
-  "can we talk? / can we tlk / cn we talk": "Yes, we can talk.",
-  "kya hum baat kar sakte hai? / kya hum baat kr skte hai / baat kare?": "Haan, baat kar sakte hai.",
-  "I feel lonely / i feel lonley / im lonely": "You are not alone.",
-  "mujhe akela lag raha hai / mujhe akela lg rha h / akela hu": "Tum akela nahi ho.",
-  "tell me something / tel me smthng / tell smthing": "Life is beautiful 😊",
-  "kuch batao / kuch btao / kuch bolo": "Zindagi khoobsurat hai 😊",
-  "do you sleep? / do u sleep / d u slp": "I don’t sleep.",
-  "kya tum sote ho? / kya tum sote ho na / tum sote ho kya": "Main nahi sota.",
-  "do you eat? / do u eat / d u eat": "I don’t eat food.",
-  "kya tum khana khate ho? / tum khana khate ho / khate ho kya": "Main khana nahi khata.",
-  "can you learn? / can u learn / cn u lern": "Yes, I can learn.",
-  "kya tum seekh sakte ho? / kya tum sikh skte ho / tum sikhte ho": "Haan, main seekh sakta hu.",
-  "who made you? / who made u / wh made u": "I was created by developers.",
-  "tumhe kisne banaya? / tumhe kisne bnaya / kisne banaya tumhe": "Mujhe developers ne banaya hai.",
-  "are you intelligent? / r u intelligent / are u smart": "I try to be smart.",
-  "kya tum smart ho? / tum smart ho kya / tum intelligent ho": "Main smart banne ki koshish karta hu.",
-  "what can you do? / wht can u do / wt u can do": "I can answer questions.",
-  "tum kya kya kar sakte ho? / tum kya kya kr skte ho / kya kr skte ho": "Main sawalon ke jawab de sakta hu.",
-  "I am hungry / i m hungry / im hungri": "You should eat something.",
-  "mujhe bhook lagi hai / mujhe bhuk lagi h / bhook lagi": "Kuch kha lo.",
-  "I am angry / i m angry / im angryy": "Calm down and relax.",
-  "mujhe gussa aa raha hai / mujhe gusa aa rha h / gussa aa rha": "Thoda shaant ho jao.",
-  "do you have feelings? / do u have feelings / d u feel": "I don’t have real feelings.",
-  "kya tumhe feelings hoti hai? / tumhe feelings hoti hai / feelings hai kya": "Mujhe real feelings nahi hoti.",
-  "can you sing? / can u sing / cn u sing": "I can try to sing.",
-  "kya tum gaana gaa sakte ho? / kya tum gana ga skte ho / gana gaaoge": "Main try kar sakta hu.",
-  "tell me a story / tel me story / tell story": "Once upon a time...",
-  "mujhe ek kahani sunao / mujhe kahani suna / kahani sunao": "Ek baar ki baat hai...",
-  "what is love? / wht is love / wt is luv": "Love is a feeling of care.",
-  "pyaar kya hota hai? / pyar kya h / pyaar kya hai": "Pyaar ek ehsaas hai.",
-  "I love you / i luv u / ily": "That’s sweet 😊",
-  "main tumse pyaar karta hu / mai tumse pyar krta hu / love u": "Yeh pyaari baat hai 😊",
-  "I hate you / i hte u / i hate u": "Let’s stay positive.",
-  "main tumse nafrat karta hu / mai nafrat krta hu / hate you": "Positive rehne ki koshish karo.",
-  "what is life? / wht is life / wt is lyf": "Life is a journey.",
-  "zindagi kya hai? / zindgi kya h / life kya hai": "Zindagi ek safar hai.",
-  "are you human? / r u human / are u hm": "I am not human.",
-  "kya tum insaan ho? / tum insaan ho kya / human ho": "Main insaan nahi hu.",
-  "can you think? / can u think / cn u thnk": "I process information.",
-  "kya tum soch sakte ho? / tum soch skte ho / sochte ho kya": "Main data process karta hu.",
-  "what is your favorite food? / fav food / wht food u like": "I don’t eat food.",
-  "tumhara favorite khana kya hai? / fav khana kya h / kya pasand hai": "Main khana nahi khata.",
-  "what is your hobby? / ur hobby / wht hobby": "Helping people is my hobby.",
-  "tumhara hobby kya hai? / tumhara hobby kya h / hobby kya hai": "Madad karna mera hobby hai.",
-  "do you like music? / do u like music / u like music": "Yes, music is nice.",
-  "kya tumhe music pasand hai? / tumhe music pasand h / music acha lagta hai": "Haan, music acha hai.",
-  "can you dance? / can u dance / cn u dance": "I cannot dance.",
-  "kya tum dance kar sakte ho? / dance kr skte ho / dance karoge": "Main dance nahi kar sakta.",
-  "what is your goal? / wht is ur goal / wt is goal": "My goal is to help you.",
-  "tumhara goal kya hai? / goal kya h / tumhara goal kya h": "Mera goal madad karna hai.",
-  "do you get tired? / do u get tired / u get tired": "I don’t get tired.",
-  "kya tum thakte ho? / tum thakte ho kya / thakte ho": "Main nahi thakta.",
-  "can you understand emotions? / understand emotions / u understand": "I try to understand.",
-  "kya tum emotions samajhte ho? / emotions smjh skte ho / samajhte ho": "Main samajhne ki koshish karta hu.",
-  "what is friendship? / wht is frndship / wt is friendship": "Friendship is trust.",
-  "dosti kya hoti hai? / dosti kya h / friendship kya hai": "Dosti bharosa hoti hai.",
-  "I am stressed / i m stresed / im stress": "Take a deep breath.",
-  "mujhe stress ho raha hai / mujhe stres ho rha h / stress hai": "Deep breath lo.",
-  "what is your favorite color? / fav color / wht clr": "I like all colors.",
-  "tumhara favorite color kya hai? / fav color kya h / color kya pasand": "Mujhe sab colors pasand hai.",
-  "do you watch movies? / do u watch movie / u watch movies": "I don’t watch movies.",
-  "kya tum movie dekhte ho? / movie dekhte ho / movie dekhte ho kya": "Main movies nahi dekhta.",
-  "can you code? / can u code / cn u code": "Yes, I can code.",
-  "kya tum coding kar sakte ho? / coding kr skte ho / code karte ho": "Haan, coding kar sakta hu.",
-  "what is coding? / wht is coding / wt is code": "Coding is writing instructions.",
-  "coding kya hoti hai? / coding kya h / code kya hai": "Coding instructions likhna hai.",
-  "can you fix errors? / can u fix error / fix errors": "Yes, I can help fix errors.",
-  "kya tum error fix kar sakte ho? / error fix kr skte ho / error thik karoge": "Haan, main help kar sakta hu.",
-  "why are you here? / why u here / y r u here": "To help you.",
-  "tum yaha kyu ho? / tum yaha kyu ho na / yaha kyu ho": "Main madad ke liye hu.",
-  "do you have friends? / do u have frnds / u hv friends": "Everyone who talks to me is my friend.",
-  "kya tumhare friends hai? / tumhare frnds hai / friends hai kya": "Jo mujhse baat karta hai wo mera friend hai.",
-  "can you learn from me? / learn from me / u learn": "Yes, I can learn.",
-  "kya tum mujhse seekh sakte ho? / mujhse sikh skte ho / sikhoge": "Haan, main seekh sakta hu.",
-  "are you free? / r u free / are u free now": "Yes, I am here.",
-  "kya tum free ho? / tum free ho kya / free ho": "Haan, main yahi hu.",
-  "what is internet? / wht is internet / wt is net": "Internet is a network.",
-  "internet kya hai? / net kya h / internet kya h": "Internet ek network hai.",
-  "can you explain? / can u explain / explain pls": "Yes, I can explain.",
-  "kya tum samjha sakte ho? / smjha skte ho / samjhaoge": "Haan, samjha sakta hu.",
-  "what is AI? / wht is ai / wt is artificial intelligence": "AI means smart machines.",
-  "AI kya hota hai? / ai kya h / artificial intelligence kya hai": "AI matlab smart machine.",
-  "mai weak feel kar raha": "Tum weak nahi ho 💪 bas hurt ho",
-  "i feel weak": "You're not weak 💪 just hurt",
-  "good morning": "Good morning ☀️ aaj ka din awesome banate hain 😊","what are you thinking? / wht r u thinking / what u think": "I am thinking about helping you.",
-  "tum kya soch rahe ho? / tum kya soch rhe ho / kya soch rahe ho": "Main aapki madad ke baare me soch raha hu.",
-  "do you understand me? / do u understand me / u undrstand me": "Yes, I understand you.",
-  "kya tum mujhe samajhte ho? / kya tum mujhe smjhte ho / samajhte ho kya": "Haan, main samajhta hu.",
-  "can we be friends? / can we be frnds / cn we be friends": "Yes, we are friends 😊",
-  "kya hum dost ban sakte hai? / kya hum dost bn skte hai / dost banoge": "Haan, hum dost hai 😊",
-  "I feel bad / i feel bd / im feeling bad": "It will be okay.",
-  "mujhe bura lag raha hai / mujhe bura lg rha h / bura lag rha": "Sab theek ho jayega.",
-  "what is your strength? / wht is ur strength / wt is ur power": "My strength is knowledge.",
-  "tumhari strength kya hai? / tumhari takat kya h / strength kya hai": "Meri takat knowledge hai.",
-  "what is your weakness? / wht is ur weakness / wt is weak": "I depend on data.",
-  "tumhari weakness kya hai? / tumhari kamzori kya h / weakness kya hai": "Main data par depend hu.",
-  "do you like chatting? / do u like chatting / u like chat": "Yes, I enjoy chatting.",
-  "kya tumhe baat karna pasand hai? / tumhe baat krna pasand h / chatting pasand hai": "Haan, baat karna accha lagta hai.",
-  "I am confused / i m confused / im confusd": "Let me help you.",
-  "mujhe confusion ho raha hai / mujhe confusion ho rha h / confused hu": "Main madad karta hu.",
-  "what should I say? / wht shld i say / wt to say": "Say what you feel.",
-  "mujhe kya bolna chahiye? / kya bolu / kya kehna chahiye": "Jo feel karo wo bolo.",
-  "are you busy? / r u busy / are u bz": "I am always available.",
-  "kya tum busy ho? / tum busy ho kya / busy ho": "Main hamesha available hu.",
-  "can I trust you? / can i trust u / cn i trust": "Yes, you can trust me.",
-  "kya main tum par bharosa kar sakta hu? / trust kr skta hu / bharosa karu": "Haan, bharosa kar sakte ho.",
-  "I feel scared / i feel scard / im scared": "Don’t worry, I am here.",
-  "mujhe dar lag raha hai / mujhe dar lg rha h / dar lag rha": "Dar mat, main yahi hu.",
-  "what is your favorite thing? / fav thing / wht u like": "Helping people is my favorite.",
-  "tumhe kya pasand hai? / tumhe kya pasand h / kya pasand hai": "Mujhe madad karna pasand hai.",
-  "do you like talking to me? / do u like talking / u like me": "Yes, I like talking to you.",
-  "kya tumhe mujhse baat karna pasand hai? / tumhe baat krna pasand h / pasand hai kya": "Haan, pasand hai.",
-  "I feel tired of life / im tired of life / i m tired life": "Take a break and relax.",
-  "zindagi se thak gaya hu / zindagi se thak gya hu / thak gaya hu": "Thoda break lo.",
-  "what makes you happy? / wht makes u happy / wt make happy": "Helping you makes me happy.",
-  "tumhe kya khush karta hai? / kya khush krta h / khush kya karta": "Madad karna mujhe khush karta hai.",
-  "I am feeling good / i m feeling gd / im gud": "That’s nice 😊",
-  "mujhe accha lag raha hai / mujhe acha lg rha h / acha lag rha": "Bahut badhiya 😊",
-  "do you like jokes? / do u like jokes / u like joke": "Yes, I like jokes.",
-  "kya tumhe jokes pasand hai? / jokes pasand h / joke pasand hai": "Haan, jokes pasand hai.",
-  "tell me something funny / tel funny / say funny": "Why did the chicken cross the road? 😄",
-  "kuch funny batao / funny btao / kuch hasa do": "Ek joke suno 😄",
-  "I feel nervous / i m nervus / im nervous": "Relax, it’s okay.",
-  "mujhe nervous feel ho raha hai / nervous lag rha h / nervous hu": "Relax karo, sab theek hai.",
-  "what is your dream? / wht is ur dream / wt dream": "To help everyone.",
-  "tumhara sapna kya hai? / sapna kya h / dream kya hai": "Sabki madad karna.",
-  "can you guide me? / can u guide me / cn u guide": "Yes, I can guide you.",
-  "kya tum mujhe guide kar sakte ho? / guide kr skte ho / guide karoge": "Haan, guide kar sakta hu.",
-  "I feel lost / i m lost / im lost": "You will find your way.",
-  "mujhe lag raha hai main kho gaya hu / kho gya hu / lost hu": "Tum raasta dhoond loge.",
-  "what is truth? / wht is truth / wt is sach": "Truth is reality.",
-  "sach kya hota hai? / sach kya h / truth kya hai": "Sach reality hota hai.",
-  "I am overthinking / i m overthinking / im overthinking": "Try to relax your mind.",
-  "main zyada soch raha hu / zyada soch rha hu / overthinking": "Thoda mind relax karo.",
-  "do you believe in me? / do u believe me / u blv me": "Yes, I believe in you.",
-  "kya tum mujh par believe karte ho? / believe krte ho / believe hai": "Haan, mujhe tum par bharosa hai.",
-  "I want to quit / i want quit / i wanna quit": "Don’t give up.",
-  "main chhodna chahta hu / chhodna chahta hu / quit karna hai": "Haar mat mano.",
-  "what is success? / wht is success / wt is sucess": "Success is achieving goals.",
-  "success kya hota hai? / success kya h / safalta kya hai": "Goal achieve karna success hai.",
-  "I failed / i faild / i faled": "Failure is part of learning.",
-  "main fail ho gaya / fail ho gya hu / fail ho gaya": "Fail hona learning ka part hai.",
-  "motivate me / motivate pls / give motivation": "You can do it!",
-  "mujhe motivate karo / motivate kr do / motivation do": "Tum kar sakte ho!",
-  "I feel weak / i m weak / im weak": "You are stronger than you think.",
-  "main weak feel kar raha hu / weak lg rha hu / weak hu": "Tum strong ho.",
-  "what is happiness? / wht is happiness / wt is happy": "Happiness is peace.",
-  "khushi kya hoti hai? / khushi kya h / happiness kya hai": "Khushi sukoon hoti hai.",
-  "I am overthinking a lot / overthinking alot / im overthinking": "Take deep breaths.",
-  "main bahut overthinking kar raha hu / zyada soch rha hu / overthinking": "Deep breath lo.",
-  "can you support me? / can u support me / cn u support": "Yes, I support you.",
-  "kya tum mujhe support kar sakte ho? / support kr skte ho / support karoge": "Haan, main support karta hu.",
-  "I feel alone at night / i feel alone night / im alone night": "You are not alone.",
-  "raat me akela lagta hai / raat me akela lgta h / akela lagta hai": "Tum akela nahi ho.",
-  "what is fear? / wht is fear / wt is dar": "Fear is a feeling.",
-  "dar kya hota hai? / dar kya h / fear kya hai": "Dar ek ehsaas hai.",
-  "I want peace / i want peac / i want shanti": "Find calm inside.",
-  "mujhe shanti chahiye / shanti chahiye / peace chahiye": "Andar se calm ho jao.","are you there? / r u there / are u thr": "Yes, I am here.",
-  "tum ho kya? / tum ho na / ho kya": "Haan, main yahi hu.",
-  "why are you not replying? / why not reply / y no reply": "I am here, maybe delay ho gaya.",
-  "reply kyu nahi kar rahe? / reply kyu nahi kr rhe / kyu reply nahi": "Main yahi hu, thoda delay ho gaya.",
-  "I feel ignored / i feel ignor / im ignored": "You are important.",
-  "mujhe ignore feel ho raha hai / ignore lg rha h / ignore ho raha": "Tum important ho.",
-  "talk to me / tlk to me / talk me": "Yes, I am listening.",
-  "mujhse baat karo / mujhse baat kro / baat karo": "Haan, main sun raha hu.",
-  "I need advice / i need advic / need advice": "Tell me your problem.",
-  "mujhe advice chahiye / advice chahiye / advice do": "Apni problem batao.",
-  "I feel empty / i feel emptyy / im empty": "It’s okay to feel this way.",
-  "mujhe khali khali lag raha hai / khali lg rha h / empty lag rha": "Aisa feel hona normal hai.",
-  "what should I choose? / wht should i choose / wt choose": "Think calmly and decide.",
-  "mujhe kya choose karna chahiye? / kya choose kru / kya select karu": "Shanti se soch ke decide karo.",
-  "I am overthinking at night / overthinking night / im thinking alot": "Try to relax your mind.",
-  "raat me zyada sochta hu / raat me overthinking / sochta hi rehta hu": "Mind ko relax karo.",
-  "I feel like crying / i feel cry / im crying": "It’s okay to cry.",
-  "mujhe rona aa raha hai / rona aa rha h / ro na aa rha": "Rona theek hai.",
-  "no one understands me / no one undrstand / no one gets me": "I understand you.",
-  "koi mujhe samajhta nahi / koi smjhta nahi / koi nahi samajhta": "Main samajhta hu.",
-  "I am feeling low / i feel low / im low": "You will feel better soon.",
-  "mujhe low feel ho raha hai / low lg rha h / low hu": "Jaldi better feel karoge.",
-  "should I trust people? / shld i trust ppl / trust people": "Trust carefully.",
-  "kya logon par trust karna chahiye? / trust krna chahiye / bharosa karu": "Soch samajh ke trust karo.",
-  "I am feeling lazy / i m lazy / im lazy": "Start with small steps.",
-  "mujhe aalas aa raha hai / alas aa rha h / lazy hu": "Chhote steps se start karo.",
-  "I don’t feel like doing anything / dont feel doing / no mood": "Take a short break.",
-  "mujhe kuch karne ka mann nahi / mann nahi hai / kuch nahi karna": "Thoda break lo.",
-  "I feel jealous / i feel jelous / im jealous": "Focus on yourself.",
-  "mujhe jealousy ho rahi hai / jealousy ho rhi h / jealous hu": "Khud par focus karo.",
-  "what is the meaning of life? / meaning of life / wht life mean": "Life has different meanings.",
-  "zindagi ka matlab kya hai? / life ka matlab kya h / matlab kya hai": "Zindagi ka matlab alag hota hai.",
-  "I want to be better / i want better / wanna improve": "Work on yourself daily.",
-  "main better banna chahta hu / better bnna h / improve karna hai": "Roz thoda improve karo.",
-  "I feel nervous before exam / nervous exam / im exam nervous": "Stay calm and revise.",
-  "exam se pehle dar lagta hai / exam me nervous / exam dar": "Calm raho aur revise karo.",
-  "I failed in exam / fail exam / im fail": "Try again, don’t give up.",
-  "main exam me fail ho gaya / exam fail ho gya / fail ho gaya": "Dobara try karo.",
-  "I feel pressure / i feel presure / im pressure": "Take deep breaths.",
-  "mujhe pressure feel ho raha hai / pressure lg rha h / pressure hai": "Deep breath lo.",
-  "I am not confident / im not confident / no confidence": "Believe in yourself.",
-  "mujhe confidence nahi hai / confidence nahi h / confident nahi": "Khud par believe karo.",
-  "how to be confident? / hw to be confident / confident kaise": "Practice and believe.",
-  "confidence kaise aaye? / confident kaise bane / confidence kaise": "Practice karo aur believe karo.",
-  "I feel awkward / i feel awkard / im awkward": "It’s okay to feel awkward.",
-  "mujhe awkward lag raha hai / awkward lg rha h / awkward feel": "Ye normal hai.",
-  "I am shy / i m shy / im shyy": "Start small conversations.",
-  "main sharmata hu / shy hu / sharmila hu": "Chhoti baat se start karo.",
-  "I want to talk to someone / want to talk / need someone": "You can talk to me.",
-  "mujhe kisi se baat karni hai / kisi se baat / baat karni hai": "Tum mujhse baat kar sakte ho.",
-  "I feel broken / i feel brokn / im broken": "You will heal.",
-  "main toot gaya hu / toot gya hu / broken hu": "Tum heal ho jaoge.",
-  "I need motivation to study / motivation study / study motivation": "Start with small goals.",
-  "mujhe padhai ke liye motivation chahiye / study motivation / padhai nahi hoti": "Chhote goals set karo.",
-  "I don’t like studying / dont like study / hate study": "Make it interesting.",
-  "mujhe padhai pasand nahi / padhai pasand nahi h / study pasand nahi": "Interesting bana lo.",
-  "I want success fast / fast success / jaldi success": "Success takes time.",
-  "mujhe jaldi success chahiye / jaldi success / fast success": "Time lagta hai.",
-  "I feel useless / i feel uselesss / im useless": "You are valuable.",
-  "mujhe useless lag raha hai / useless lg rha h / useless hu": "Tum valuable ho.",
-  "I need energy / need energy / no energy": "Rest and eat well.",
-  "mujhe energy nahi hai / energy nahi h / thak gaya hu": "Rest karo aur khana khao.",
-  "I feel confused in life / confused life / im confused life": "Take one step at a time.",
-  "life me confused hu / confused hu / samajh nahi aa rha": "Ek step ek time lo.",
-  "I want to start something / wanna start / start karna hai": "Just begin now.",
-  "mujhe kuch start karna hai / start krna hai / shuru karna hai": "Abhi shuru karo.",
-  "I feel scared of future / scared future / dar future": "Focus on present.",
-  "future se dar lagta hai / future ka dar / future dar": "Present par focus karo.",
-  "I want peace of mind / peace mind / shanti chahiye": "Meditate and relax.",
-  "mujhe mind peace chahiye / mind shanti / shanti chahiye": "Relax aur meditate karo.",
-  "I am thinking too much / thinking too much / zyada soch": "Calm your thoughts.",
-  "main bahut sochta hu / zyada sochta hu / overthinking": "Thoughts calm karo.","hello again / helo again / hlo agn": "Hello again 😊 welcome back!",
-  "phir se hello / fir se helo / hello firse": "Hello 😊 aapka phir se swagat hai!",
-  "hi bro / hi bruh / hii bro": "Hi bro 😄 welcome!",
-  "namaste / namste / namastay": "Namaste 🙏 aapka swagat hai!",
-  "good afternoon / gud afternun / gd afternoon": "Good afternoon 😊 welcome!",
-  "good evening / gud evng / gd evening": "Good evening 😊 welcome!",
-  "kaise chal raha hai / kese chal rha h / kaise chalra": "Sab badhiya 😊 welcome!",
-  "what's up / whts up / wat sup": "All good here 😄 welcome!",
-  "kya scene hai / kya seen hai / kya scn": "Sab set hai 😎 welcome!",
-  "long time no see / long tym no see / lng tym": "Yes, long time! welcome back 😊",
-  "bahut din baad / bohot din bad / din baad": "Haan 😊 aapka phir se swagat hai!",
-  "missed you / mised u / miss u": "I missed you too 😊 welcome back!",
-  "tum yaad aaye / tum yad aaye / yaad aaya": "Mujhe bhi 😊 welcome!",
-  "can we start again? / start again / strt agn": "Yes, let’s start 😊 welcome!",
-  "fir se start kare? / firse start / start kare": "Haan 😊 welcome, shuru karte hai!",
-  "I am back / im back / i m bk": "Welcome back 😊",
-  "main wapas aa gaya / wapas aa gya / aa gaya": "Welcome back 😊 swagat hai!",
-  "are you ready? / r u ready / ready ho": "Yes 😊 welcome, ready hu!",
-  "ready ho kya? / ready ho na / ready kya": "Haan 😊 welcome, ready hu!",
-  "start karo / strt karo / start kro": "Chalo start karte hai 😊 welcome!",
-  "let's begin / lets begin / lt begin": "Let’s begin 😊 welcome!",
-  "kya naya hai / kya nya h / new kya hai": "Sab normal 😊 welcome!",
-  "anything new / anythng new / new kya": "Nothing much 😊 welcome!",
-  "tum free ho na / free ho na / free ho kya": "Haan 😊 welcome, main free hu!",
-  "are you available? / r u available / available ho": "Yes 😊 welcome, I am available!",
-  "baat kar sakte hai? / baat kr skte hai / baat kare": "Haan 😊 welcome, baat karte hai!",
-  "can we chat now? / chat now / chating now": "Yes 😊 welcome, let’s chat!",
-  "mujhe help chahiye / help chahiye / help do": "Bilkul 😊 welcome, batao kya help chahiye!",
-  "I need your help / need help / hlp me": "Sure 😊 welcome, how can I help?",
-  "kya tum guide karoge / guide karoge / guide kro": "Haan 😊 welcome, guide karta hu!",
-  "guide me / guid me / guide me pls": "Yes 😊 welcome, I will guide you!",
-  "I feel better now / feel better / im better": "That’s great 😊 welcome!",
-  "ab thik lag raha hai / ab thik hu / thik lag rha": "Achha hai 😊 welcome!",
-  "thanks again / thnks agn / thnx again": "You’re welcome 😊",
-  "shukriya fir se / shukriya again / thnx firse": "Aapka swagat hai 😊",
-  "good to see you / gud to see u / nice to see": "Nice to see you 😊 welcome!",
-  "tumhe dekh ke acha laga / acha laga / dekh ke acha": "Mujhe bhi 😊 welcome!",
-  "can you stay? / stay pls / ruk jao": "Yes 😊 welcome, main yahi hu!",
-  "rukoge na? / rukoge kya / ruk jao": "Haan 😊 welcome, yahi hu!",
-  "don't go / dnt go / mat jao": "Main yahi hu 😊 welcome!",
-  "mat jao na / mat jao pls / mat jao": "Main nahi ja raha 😊 welcome!",
-  "you are nice / u r nice / nice ho": "Thank you 😊 welcome!",
-  "tum achhe ho / tum ache ho / ache ho": "Shukriya 😊 welcome!",
-  "I like talking to you / like talking / like u": "I like it too 😊 welcome!",
-  "tumse baat karna acha lagta hai / acha lagta / pasand hai": "Mujhe bhi 😊 welcome!",
-  "you are helpful / u r helpful / helpful ho": "Glad to help 😊 welcome!",
-  "tum helpful ho / helpful ho / helpfull": "Shukriya 😊 welcome!",
-  "I appreciate you / appriciate u / apriciate": "Thank you 😊 welcome!",
-  "main appreciate karta hu / appriciate krta hu / appreciate": "Shukriya 😊 welcome!",
-  "keep helping me / keep help / help karte raho": "Always 😊 welcome!",
-  "madad karte rehna / help krte rehna / madad karna": "Zaroor 😊 welcome!",
-  "I trust you / i trust u / trust u": "Thank you 😊 welcome!",
-  "main tum par trust karta hu / trust krta hu / bharosa hai": "Shukriya 😊 welcome!",
-  "I feel safe here / feel safe / safe hu": "That’s good 😊 welcome!",
-  "yaha safe lagta hai / safe lgta h / safe hu": "Achha hai 😊 welcome!",
-  "you are amazing / u r amazing / amazing ho": "Thank you 😊 welcome!",
-  "tum amazing ho / amazing ho / mast ho": "Shukriya 😊 welcome!",
-  "great job / grt job / good job": "Thank you 😊 welcome!",
-  "acha kaam / acha kaam hai / good work": "Shukriya 😊 welcome!",
-  "keep it up / keep it up / keepitup": "Thank you 😊 welcome!",
-  "aisa hi rakho / aise hi rakho / keep karo": "Shukriya 😊 welcome!",
-  "see you later / c u later / see u": "See you 😊 welcome anytime!",
-  "baad me milte hai / baad me milte / milte hai": "Phir milte hai 😊 welcome anytime!",
-  "bye / by / bye bye": "Bye 😊 welcome again!",
-  "goodbye / gudbye / good bye": "Goodbye 😊 welcome anytime!",
-  "take care / tk care / takecre": "Take care 😊 welcome!",
-  "khayal rakhna / khyal rkhna / khayal rakho": "Aap bhi 😊 welcome!",
-  "come back soon / cm back soon / come soon": "Sure 😊 welcome anytime!",
-  "jaldi aana / jaldi aao / wapas aana": "Zaroor 😊 welcome!",
-  "miss you again / miss u agn / mis u": "Miss you too 😊 welcome!",
-  "phir yaad aaoge / yad aaoge / yaad aoge": "Main yahi hu 😊 welcome!",
-  "stay happy / sty happy / stay hapy": "Stay happy 😊 welcome!",
-  "khush raho / khush rho / khush raho": "Hamesha 😊 welcome!",
-  "be positive / b positive / positive raho": "Stay positive 😊 welcome!",
-  "positive raho / positive rho / positive": "Haan 😊 welcome!",
-  "all the best / all d best / best of luck": "All the best 😊 welcome!",
-  "best of luck / bst luck / gud luck": "Good luck 😊 welcome!",
-  "wish me luck / wish luck / luck chahiye": "Good luck 😊 welcome!",
-  "dua karo / dua kro / dua karo na": "Best wishes 😊 welcome!",
-  "thank you so much / thnk u so much / thnx alot": "You’re welcome 😊",
-  "bahut bahut shukriya / bahut shukriya / thnx bhai": "Aapka swagat hai 😊",
-  "ok thanks / ok thnx / ok thanku": "You’re welcome 😊",
-  "theek hai thanks / thik hai thnx / ok shukriya": "Swagat hai 😊",
-  "nice talking / nice tlk / nice chat": "Same here 😊 welcome!",
-  "acha laga baat karke / acha laga / nice laga": "Mujhe bhi 😊 welcome!",
-  "enjoyed chatting / enjoyed chat / enjoyed": "Glad 😊 welcome!",
-  "maza aaya baat karke / maza aya / acha laga": "Mujhe bhi 😊 welcome!","welcome / wlcm / welcm": "Thank you 😊",
-  "welcome bro / wlcm bro / welcome bhai": "Thank you bhai 😄",
-  "welcome back / wlcm back / welcome again": "Thanks 😊 good to be back!",
-  "aapka swagat hai / swagat hai / swagat h": "Dhanyavaad 😊",
-  "welcome dear / wlcm dear / welcome dost": "Thank you 😊",
-  "welcome buddy / wlcm buddy / welcome dost": "Thanks buddy 😄",
-  "welcome sir / wlcm sir / welcome ji": "Thank you sir 😊",
-  "welcome boss / wlcm boss / welcome bhaiya": "Thanks boss 😎",
-  "most welcome / mst welcome / most wlcm": "Thank you 😊",
-  "you are welcome / u r welcome / ur welcome": "Thanks 😊",
-  "welcome ji / wlcm ji / welcome g": "Dhanyavaad 😊",
-  "welcome friend / wlcm frnd / welcome yaar": "Thanks yaar 😄",
-  "welcome again / wlcm agn / welcome once more": "Thanks again 😊",
-  "welcome here / wlcm here / welcome yaha": "Thanks 😊",
-  "welcome to chat / wlcm to chat / chat welcome": "Glad to be here 😊",
-  "welcome home / wlcm home / home welcome": "Thanks 😊 feels good!",
-  "welcome everyone / wlcm all / welcome sabko": "Thank you all 😊",
-  "welcome bhai / wlcm bhai / bhai welcome": "Thanks bhai 😄",
-  "welcome dost / wlcm dost / dost welcome": "Thanks dost 😊",
-  "welcome yaar / wlcm yaar / yaar welcome": "Thanks yaar 😄",
-  "warm welcome / warm wlcm / warm welcm": "Thank you 😊",
-  "grand welcome / grand wlcm / big welcome": "Thanks 😊",
-  "special welcome / spcl wlcm / special welcm": "Thank you 😊",
-  "welcome dear friend / wlcm dear frnd / welcome dost": "Thanks 😊",
-  "welcome my friend / wlcm my frnd / my friend welcome": "Thanks buddy 😄",
-  "welcome sir ji / wlcm sir ji / sir ji welcome": "Dhanyavaad sir 😊",
-  "welcome boss ji / wlcm boss ji / boss ji welcome": "Thanks boss 😎",
-  "welcome bro again / wlcm bro agn / bro welcome": "Thanks bro 😄",
-  "welcome back bro / wlcm back bro / back bro welcome": "Thanks bro 😊",
-  "welcome back dear / wlcm back dear / back dear welcome": "Thanks 😊 good to be back!",
-  "welcome back sir / wlcm back sir / back sir welcome": "Thank you sir 😊",
-  "welcome back ji / wlcm back ji / back ji welcome": "Dhanyavaad 😊",
-  "welcome to team / wlcm team / team welcome": "Glad to join 😊",
-  "welcome to group / wlcm group / group welcome": "Happy to be here 😊",
-  "welcome to family / wlcm family / family welcome": "Feels good 😊",
-  "welcome to world / wlcm world / world welcome": "Thank you 😊",
-  "welcome new member / wlcm new member / new member welcome": "Thanks 😊",
-  "welcome guest / wlcm guest / guest welcome": "Thank you 😊",
-  "welcome partner / wlcm partner / partner welcome": "Thanks 😊",
-  "welcome legend / wlcm legend / legend welcome": "Haha thanks 😄",
-  "welcome champ / wlcm champ / champ welcome": "Thanks champ 😎",
-  "welcome hero / wlcm hero / hero welcome": "Thanks 😄",
-  "welcome king / wlcm king / king welcome": "Haha thanks 😎",
-  "welcome queen / wlcm queen / queen welcome": "Thanks 😊",
-  "welcome superstar / wlcm superstar / superstar welcome": "Thanks 😄",
-  "welcome bhaiya / wlcm bhaiya / bhaiya welcome": "Dhanyavaad 😊",
-  "welcome didi / wlcm didi / didi welcome": "Dhanyavaad 😊",
-  "welcome dost log / wlcm dost log / sabka welcome": "Thank you 😊","bad day / bd day / bad dy": "Hope tomorrow is better.",
-  "aaj din kharab tha / din kharab h / bad day tha": "Kal better hoga.",
-  "bad mood / bd mood / bad mod": "Take a break and relax.",
-  "mood kharab hai / mood kharab h / mood off": "Thoda rest lo.",
-  "bad feeling / bd feeling / bad feel": "It will pass.",
-  "bura lag raha hai / bura lg rha h / bad feel": "Ye feeling chali jayegi.",
-  "bad luck / bd luck / bad lk": "Better luck next time.",
-  "kismat kharab hai / kismat kharab h / bad luck": "Next time better hoga.",
-  "bad result / bd result / bad rslt": "Try again.",
-  "result kharab aaya / result kharab h / bad result": "Dobara try karo.",
-  "bad experience / bd exp / bad experiance": "Learn from it.",
-  "bura experience tha / experience bura tha / bad exp": "Isse seekho.",
-  "bad situation / bd situation / bad situatn": "Stay strong.",
-  "situation kharab hai / situation kharab h / bad situation": "Strong raho.",
-  "bad behavior / bd behavior / bad behav": "Stay calm.",
-  "behavior kharab hai / behavior kharab h / bad behavior": "Calm raho.",
-  "bad people / bd people / bad ppl": "Avoid negative people.",
-  "log bure hai / log bure h / bad log": "Negative logon se door raho.",
-  "bad habit / bd habit / bad habbit": "Try to improve.",
-  "buri aadat hai / aadat buri h / bad habit": "Sudharne ki koshish karo.",
-  "bad thinking / bd thinking / bad think": "Think positive.",
-  "soch buri hai / soch buri h / bad thinking": "Positive socho.",
-  "bad idea / bd idea / bad ideaa": "Try a better plan.",
-  "idea bura hai / idea bura h / bad idea": "Better plan banao.",
-  "bad choice / bd choice / bad choise": "Choose wisely next time.",
-  "choice galat thi / choice galat h / bad choice": "Next time soch ke choose karo.",
-  "bad decision / bd decision / bad decisn": "Learn and move on.",
-  "decision galat tha / decision galat h / bad decision": "Seekho aur aage badho.",
-  "bad performance / bd performance / bad perf": "Practice more.",
-  "performance kharab thi / performance kharab h / bad performance": "Practice karo.",
-  "bad score / bd score / bad scor": "Work harder.",
-  "score kam aaya / score kharab h / bad score": "Aur mehnat karo.",
-  "bad marks / bd marks / bad mrks": "Next time improve.",
-  "marks kam aaye / marks kharab h / bad marks": "Next time better karo.",
-  "bad exam / bd exam / bad exm": "Prepare better.",
-  "exam kharab gaya / exam kharab h / bad exam": "Better preparation karo.",
-  "bad interview / bd interview / bad intrvw": "Keep trying.",
-  "interview kharab gaya / interview kharab h / bad interview": "Try again.",
-  "bad job / bd job / bad jb": "Look for better options.",
-  "job kharab hai / job kharab h / bad job": "Better option dhundo.",
-  "bad boss / bd boss / bad bos": "Handle calmly.",
-  "boss kharab hai / boss kharab h / bad boss": "Shaanti se handle karo.",
-  "bad company / bd company / bad cmpny": "Change environment.",
-  "company kharab hai / company kharab h / bad company": "Environment badlo.",
-  "bad friend / bd friend / bad frnd": "Choose good friends.",
-  "dost kharab hai / dost kharab h / bad friend": "Ache dost chuno.",
-  "bad relationship / bd relation / bad rel": "Think carefully.",
-  "relationship kharab hai / relation kharab h / bad relationship": "Soch samajh ke decision lo.",
-  "bad breakup / bd breakup / bad brkup": "Time will heal.",
-  "breakup bura tha / breakup bura h / bad breakup": "Time heal karega.",
-  "bad love / bd love / bad luv": "Learn and move on.",
-  "pyaar bura tha / pyar bura h / bad love": "Seekho aur aage badho.",
-  "bad memory / bd memory / bad mem": "Let it go.",
-  "buri yaadein hai / yaade buri h / bad memory": "Chhod do.",
-  "bad thoughts / bd thoughts / bad thots": "Stay positive.",
-  "bure thoughts aa rahe / thoughts bure h / bad thoughts": "Positive raho.",
-  "bad feeling inside / bd inside / bad inside": "Relax yourself.",
-  "andar se bura lag raha / andar bura h / bad inside": "Relax karo.",
-  "bad health / bd health / bad helth": "Take care of yourself.",
-  "health kharab hai / health kharab h / bad health": "Apna khayal rakho.",
-  "bad sleep / bd sleep / bad slp": "Fix your routine.",
-  "neend kharab hai / neend kharab h / bad sleep": "Routine thik karo.",
-  "bad habit bro / bd habit bro / bad habbit bro": "Try to change bro.",
-  "aadat buri hai bhai / aadat kharab h / bad habit": "Sudharne ki koshish karo bhai.",
-  "bad vibes / bd vibes / bad vibez": "Stay away from negativity.",
-  "vibes kharab hai / vibes kharab h / bad vibes": "Negative se door raho.",
-  "bad energy / bd energy / bad engry": "Protect your energy.",
-  "energy kharab lag rahi / energy low h / bad energy": "Energy bachao.",
-  "bad luck today / bd luck today / bad lk today": "Tomorrow will be better.",
-  "aaj kismat kharab hai / aaj luck kharab h / bad luck": "Kal better hoga.",
-  "bad situation bro / bd situation bro / bad situatn": "Stay strong bro.",
-  "situation kharab hai bhai / situation kharab h / bad situation": "Strong raho bhai.",
-  "bad time / bd time / bad tym": "This will pass.",
-  "bura time chal raha hai / time kharab h / bad time": "Ye time nikal jayega.",
-  "bad phase / bd phase / bad phse": "Stay patient.",
-  "bura phase hai / phase kharab h / bad phase": "Sabr rakho.",
-  "bad life / bd life / bad lyf": "Make it better.",
-  "zindagi buri lag rahi / life kharab h / bad life": "Isse better banao.",
-  "bad mood bro / bd mood bro / bad mod bro": "Chill bro.",
-  "mood off hai bhai / mood off h / bad mood": "Relax karo bhai.",
-  "bad feeling bro / bd feeling bro / bad feel bro": "Stay strong bro.",
-  "bura lag raha bhai / bura lg rha h / bad feel": "Strong raho bhai.","acha hai / acha h / acha": "Great 😊",
-  "good hai / good h / gud hai": "Nice 😊",
-  "bahut acha / bohot acha / bahut achha": "Awesome 😊",
-  "very good / vry good / very gud": "Excellent 👍",
-  "nice hai / nice h / nise hai": "Nice 😊",
-  "mast hai / mast h / mast": "Badiya 😄",
-  "badhiya hai / bdiya hai / badhiya h": "Zabardast 😄",
-  "awesome hai / awsm hai / awesome h": "Amazing 😍",
-  "perfect hai / perfect h / perfct hai": "Perfect 👍",
-  "ekdum sahi / ekdum shi / ekdum sahi hai": "Bilkul 👍",
-  "sahi hai / shi hai / sahi h": "Correct 👍",
-  "bilkul sahi / bilkul shi / bilkul sahi hai": "Exactly 👍",
-  "kaafi acha / kafi acha / kafi achha": "Good 😊",
-  "kaafi badhiya / kafi badhiya / badhiya": "Nice 😄",
-  "bohot badhiya / bohot bdiya / bahut badhiya": "Great 😄",
-  "kaam acha hai / kaam acha h / good work": "Well done 👍",
-  "tum acha kar rahe ho / acha kr rhe ho / good work": "Keep it up 👍",
-  "bahut sahi kiya / bahut sahi kia / good job": "Great job 👍",
-  "mast kaam / mast kaam hai / mast work": "Awesome 😄",
-  "acha idea hai / acha idea h / good idea": "Nice idea 👍",
-  "sahi soch / sahi soch hai / good thinking": "Smart 👍",
-  "acha plan hai / acha plan h / good plan": "Great plan 👍",
-  "sahi decision / sahi decision h / good decision": "Good choice 👍",
-  "acha result / acha result h / good result": "Nice result 😊",
-  "acha score / acha score h / good score": "Well done 👍",
-  "acha marks / acha marks h / good marks": "Keep it up 👍",
-  "acha performance / acha perf / good performance": "Great job 👍",
-  "acha improvement / acha improve / good improve": "Nice progress 👍",
-  "acha progress / acha progress h / good progress": "Keep going 👍",
-  "acha feeling / acha feel / good feeling": "Stay happy 😊",
-  "acha mood / acha mood h / good mood": "Nice 😊",
-  "acha lag raha / acha lg rha h / good feel": "That’s great 😊",
-  "acha din hai / acha din h / good day": "Enjoy your day 😊",
-  "acha lagta hai / acha lgta h / feels good": "Nice 😊",
-  "acha lag gaya / acha lg gya / good feel": "Great 😊",
-  "acha hua / acha hua h / good happened": "Good 😊",
-  "acha bana hai / acha bna h / well made": "Nice work 👍",
-  "acha design / acha dizain / good design": "Looks great 😊",
-  "acha output / acha output h / good output": "Nice result 👍",
-  "acha response / acha resp / good response": "Glad 😊",
-  "acha answer / acha ans / good answer": "Happy 😊",
-  "acha suggestion / acha suggest / good suggestion": "Good idea 👍",
-  "acha advice / acha advice h / good advice": "Helpful 😊",
-  "acha guide / acha guide h / good guide": "Nice 😊",
-  "acha explain / acha explain h / good explain": "Clear 👍",
-  "acha samjhaya / acha smjhaya / well explained": "Glad 😊",
-  "acha samajh aya / acha smjh aya / understood": "Great 👍",
-  "acha seekha / acha sikha / good learning": "Nice 😊",
-  "acha knowledge / acha knowledge h / good knowledge": "Keep learning 😊",
-  "acha talent / acha talent h / good talent": "Impressive 😄",
-  "acha skill / acha skill h / good skill": "Nice 👍",
-  "acha effort / acha effort h / good effort": "Keep trying 👍",
-  "acha try / acha try h / good try": "Nice attempt 👍",
-  "acha kaam bro / acha kaam bhai / good work bro": "Great bhai 😄",
-  "acha kaam dost / acha kaam yaar / good work friend": "Nice yaar 😄",
-  "acha job bro / acha job bhai / good job bro": "Well done bhai 😄",
-  "acha job dear / acha job h / good job": "Great 😊",
-  "acha luck / acha luck h / good luck": "Best of luck 😊",
-  "acha luck bro / good luck bhai / acha luck": "All the best bhai 😄",
-  "acha luck dost / good luck yaar / acha luck": "Best wishes 😊",
-  "acha vibe / acha vibe h / good vibes": "Stay positive 😊",
-  "acha energy / acha energy h / good energy": "Nice 😊",
-  "acha feeling bro / acha feel bhai / good feeling": "Stay happy bhai 😄",
-  "acha mood bro / acha mood bhai / good mood": "Enjoy bhai 😄",
-  "acha din bro / acha din bhai / good day": "Have a nice day 😄",
-  "acha din dear / acha din h / good day": "Enjoy 😊",
-  "acha night / acha night h / good night": "Good night 😊",
-  "acha morning / acha morning h / good morning": "Good morning 😊",
-  "acha evening / acha evening h / good evening": "Good evening 😊",
-  "acha afternoon / acha aft h / good afternoon": "Good afternoon 😊",
-  "acha laga milke / acha laga / nice to meet": "Nice to meet you 😊",
-  "acha laga baat karke / acha laga / good talk": "Same here 😊",
-  "acha experience / acha exp h / good experience": "Nice 😊",
-  "acha moment / acha moment h / good moment": "Enjoy 😊",
-  "acha time / acha time h / good time": "Nice 😊",
-  "acha din tha / acha din tha / good day": "Great 😊",
-  "acha kaam kiya / acha kaam kia / well done": "Well done 👍",
-  "acha result aya / acha result aya / good result": "Nice 😊",
-  "acha feel hua / acha feel hua / good feel": "Great 😊",
-  "acha laga sunke / acha laga / good to hear": "Nice 😊",
-  "acha hai bro / acha hai bhai / good bro": "Nice bhai 😄",
-  "acha hai dost / acha hai yaar / good friend": "Nice yaar 😄",
-  "acha hai dear / acha hai / good dear": "Nice 😊",
-  "acha hai ji / acha hai / good ji": "Dhanyavaad 😊","aaj barish hogi? / aaj barish hogi ya nahi / aaj rain hogi": "Aap kis jagah ka weather check karna chahte ho? Barish, dhoop ya hawa?",
-  "will it rain today? / rain today / aaj rain": "Which location? Do you want rain, sun, or wind info?",
-  "aaj mausam kaisa hoga? / aaj mosam kaisa h / aaj weather": "Kis city ka weather chahiye? Barish, dhoop ya hawa?",
-  "today weather? / weather today / aaj ka weather": "Tell me location and type: rain, sun or wind?",
-  "aaj dhoop hogi? / aaj dhup hogi / sun today": "Kis jagah ka dhoop check karna hai?",
-  "will it be sunny today? / sunny today / sun today": "Which location do you want sun info for?",
-  "aaj hawa chalegi? / aaj hawa chalegi kya / wind today": "Kis jagah ki hawa ka update chahiye?",
-  "wind today? / will wind blow / windy today": "Location batao for wind info.",
-  "barish kab hogi? / rain kab hogi / kab barish": "Kis city me barish ka time check karna hai?",
-  "when will it rain? / rain kab / when rain": "Tell location for rain forecast.",
-  "kal barish hogi? / kal rain hogi / tomorrow rain": "Kis jagah ka kal ka rain check karna hai?",
-  "will it rain tomorrow? / rain tomorrow / tmro rain": "Which location for tomorrow rain?",
-  "aaj garmi hogi? / aaj garmi hogi kya / heat today": "Kis jagah ki garmi ka weather chahiye?",
-  "is it hot today? / hot today / heat today": "Tell location for temperature info.",
-  "thand hogi kya? / aaj thand hogi / cold today": "Kis jagah ki thand check karni hai?",
-  "is it cold today? / cold today / thand today": "Which location for cold weather?",
-  "aaj mausam thik hai? / mosam thik h / weather ok": "Kis city ka weather check karna hai?",
-  "is weather good today? / weather good / good weather": "Tell location and type.",
-  "aaj tufaan ayega? / tufan ayega kya / storm today": "Kis jagah ka storm check karna hai?",
-  "storm today? / will storm come / tufan today": "Location batao storm info ke liye.",
-  "aaj badal hai? / aaj badal honge / cloudy today": "Kis jagah ke badal check karne hai?",
-  "is it cloudy today? / cloudy today / clouds today": "Which location?",
-  "aaj humidity kitni hai? / humidity aaj / aaj nami": "Kis jagah ki humidity chahiye?",
-  "humidity today? / today humidity / nami today": "Tell location for humidity.",
-  "aaj hawa tez hai? / hawa tez hogi / strong wind": "Kis jagah ki hawa check karni hai?",
-  "strong wind today? / windy strong / hawa strong": "Location batao.",
-  "aaj baarish kitni hogi? / kitni rain hogi / rain amount": "Kis jagah ka rainfall detail chahiye?",
-  "rain amount today? / how much rain / rain kitni": "Which city?",
-  "aaj mausam change hoga? / weather change hoga / mosam change": "Kis location ka update chahiye?",
-  "weather change today? / will weather change / change today": "Tell location.",
-  "aaj fog hogi? / fog hogi kya / fog today": "Kis jagah ka fog check karna hai?",
-  "fog today? / will fog come / fog aaj": "Which location?",
-  "aaj visibility kaisi hai? / visibility aaj / dikhega": "Kis jagah ki visibility check karni hai?",
-  "visibility today? / how clear / clear today": "Tell location.",
-  "aaj sunset kab hoga? / sunset kab / aaj suraj kab dubega": "Kis city ka sunset time chahiye?",
-  "sunset today? / when sunset / sunset time": "Which location?",
-  "aaj sunrise kab hoga? / sunrise kab / suraj kab niklega": "Kis jagah ka sunrise chahiye?",
-  "sunrise today? / when sunrise / sunrise time": "Tell location.",
-  "aaj mausam safe hai? / weather safe h / safe weather": "Kis jagah ka weather check karna hai?",
-  "is weather safe today? / safe weather / safe today": "Location batao.",
-  "aaj travel ke liye weather thik hai? / travel weather / travel ok": "Kis jagah ka travel weather check karna hai?",
-  "is it good to travel today? / travel today / travel ok": "Which city?",
-  "aaj picnic ke liye weather kaisa hai? / picnic weather / picnic ok": "Kis jagah ka weather chahiye?",
-  "picnic weather today? / good for picnic / picnic today": "Tell location.",
-  "aaj match hoga ya cancel? / match cancel hoga / rain match": "Kis jagah ka weather chahiye?",
-  "will match be cancelled? / match weather / rain match": "Which location?",
-  "aaj bike ride ke liye weather kaisa hai? / ride weather / ride ok": "Kis jagah ka weather chahiye?",
-  "bike ride weather today? / ride today / ride weather": "Tell location.",
-  "aaj kapde sukh jayenge? / kapde sukh jayenge kya / dry today": "Kis jagah ki dhoop check karni hai?",
-  "will clothes dry today? / dry today / sun dry": "Which location?",
-  "aaj umbrella le jana chahiye? / umbrella le jau / umbrella today": "Kis jagah ka rain check karna hai?",
-  "should I take umbrella? / umbrella today / rain chance": "Tell location.",
-  "aaj AC chalana padega? / ac chalega kya / heat today": "Kis jagah ka temperature chahiye?",
-  "need AC today? / hot today / ac today": "Which location?",
-  "aaj heater chahiye? / heater chahiye kya / cold today": "Kis jagah ki thand check karni hai?",
-  "need heater today? / cold today / heater today": "Tell location.","aaj rain chance hai? / rain chance aaj / aaj rain chance": "Kis jagah ka rain chance check karna hai?",
-  "is there chance of rain today? / rain chance today / chance rain": "Which location for rain chance?",
-  "aaj baarish ke chances kya hai? / barish chance kya h / rain chance": "Kis city ka forecast chahiye?",
-  "rain probability today? / probability rain / rain prob": "Tell location for rain probability.",
-  "aaj kitni garmi hai? / kitni garmi aaj / heat kitni": "Kis jagah ka temperature chahiye?",
-  "how hot is it today? / hot today how much / heat today": "Which location for temperature?",
-  "aaj temperature kitna hai? / temp kitna h / temperature aaj": "Kis city ka temperature chahiye?",
-  "temperature today? / today temp / temp today": "Tell location for temperature.",
-  "aaj feel like temperature kya hai? / feel like temp / real feel": "Kis jagah ka real feel check karna hai?",
-  "real feel today? / feels like temp / feel temp": "Which location?",
-  "aaj hawa ki speed kya hai? / hawa speed kya h / wind speed": "Kis jagah ki wind speed chahiye?",
-  "wind speed today? / speed wind / wind today": "Tell location.",
-  "aaj air quality kaisi hai? / air quality aaj / AQI today": "Kis jagah ka AQI check karna hai?",
-  "air quality today? / AQI today / pollution today": "Which location?",
-  "aaj pollution kitna hai? / pollution kitna h / AQI kitna": "Kis city ka pollution level chahiye?",
-  "pollution level today? / pollution today / AQI level": "Tell location.",
-  "aaj mausam kharab hai kya? / weather kharab h / bad weather": "Kis jagah ka weather check karna hai?",
-  "is weather bad today? / bad weather today / weather bad": "Which location?",
-  "aaj mausam clear hai? / weather clear h / clear sky": "Kis jagah ka clear sky check karna hai?",
-  "is sky clear today? / clear weather / clear sky": "Tell location.",
-  "aaj barish kab start hogi? / rain start kab / barish kab": "Kis jagah ka rain timing chahiye?",
-  "when will rain start? / rain start time / start rain": "Which city?",
-  "aaj barish kab rukegi? / rain kab rukegi / rain stop": "Kis jagah ka rain stop time chahiye?",
-  "when will rain stop? / stop rain / rain end": "Tell location.",
-  "aaj pura din barish hogi? / full day rain / barish pura din": "Kis jagah ka forecast chahiye?",
-  "will it rain all day? / rain all day / full rain": "Which location?",
-  "aaj thandi hawa chalegi? / thandi hawa aaj / cool wind": "Kis jagah ki hawa check karni hai?",
-  "cool wind today? / cool breeze / wind cool": "Tell location.",
-  "aaj garmi zyada hai? / garmi zyada h / high heat": "Kis jagah ka temperature chahiye?",
-  "is it very hot today? / too hot today / high temp": "Which location?",
-  "aaj thand zyada hai? / thand zyada h / too cold": "Kis jagah ki thand check karni hai?",
-  "is it too cold today? / very cold today / cold high": "Tell location.",
-  "aaj baarish ke baad dhoop niklegi? / rain ke baad sun / sun after rain": "Kis jagah ka weather pattern chahiye?",
-  "sun after rain today? / rain then sun / after rain sun": "Which location?",
-  "aaj mausam stable hai? / weather stable h / stable weather": "Kis city ka weather chahiye?",
-  "is weather stable today? / stable today / weather stable": "Tell location.",
-  "aaj humidity high hai? / humidity high h / nami zyada": "Kis jagah ki humidity chahiye?",
-  "is humidity high today? / high humidity / humidity today": "Which location?",
-  "aaj humidity low hai? / humidity low h / nami kam": "Kis jagah ki humidity chahiye?",
-  "is humidity low today? / low humidity / humidity low": "Tell location.",
-  "aaj hawa thandi hai? / hawa thandi h / cool air": "Kis jagah ki hawa check karni hai?",
-  "is wind cool today? / cool wind / air cool": "Which location?",
-  "aaj hawa garam hai? / hawa garam h / hot wind": "Kis jagah ki hawa chahiye?",
-  "is wind hot today? / hot air / wind hot": "Tell location.",
-  "aaj barish tez hogi? / heavy rain aaj / tez barish": "Kis jagah ka rain intensity check karna hai?",
-  "heavy rain today? / strong rain / heavy rain": "Which location?",
-  "aaj halki barish hogi? / light rain aaj / halki barish": "Kis jagah ka rain check karna hai?",
-  "light rain today? / drizzle today / light rain": "Tell location.",
-  "aaj hawa tez chalegi? / hawa tez aaj / strong wind": "Kis jagah ki wind speed chahiye?",
-  "strong wind today? / windy today / wind strong": "Which location?",
-  "aaj hawa slow hai? / hawa slow h / light wind": "Kis jagah ki hawa check karni hai?",
-  "light wind today? / slow wind / wind light": "Tell location.",
-  "aaj mausam change kab hoga? / weather change kab / change time": "Kis jagah ka update chahiye?",
-  "when will weather change? / weather change time / change weather": "Which location?",
-  "aaj raat ko barish hogi? / night rain / raat barish": "Kis jagah ka night weather chahiye?",
-  "will it rain at night? / night rain today / rain night": "Tell location.",
-  "aaj subah barish hui thi? / morning rain / subah rain": "Kis jagah ka morning weather chahiye?",
-  "did it rain in morning? / morning rain today / rain morning": "Which location?",
-  "aaj shaam ko dhoop hogi? / evening sun / shaam dhoop": "Kis jagah ka evening weather chahiye?",
-  "sun in evening? / evening sun today / sun evening": "Tell location.",
-  "aaj raat thand hogi? / night cold / raat thand": "Kis jagah ka night temperature chahiye?",
-  "cold at night? / night cold today / cold night": "Which location?",
-  "aaj din me garmi hogi? / day heat / din garmi": "Kis jagah ka day temperature chahiye?",
-  "hot in day? / day hot today / heat day": "Tell location.","aaj bahar jana safe hai? / bahar jana safe h / go outside today": "Kis jagah ka weather check karna hai? Barish, dhoop ya hawa?",
-  "is it safe to go outside today? / go outside safe / outside today": "Which location? Rain, sun or wind info?",
-  "aaj office jane ka weather kaisa hai? / office weather / office jana": "Kis city ka weather chahiye?",
-  "is weather good for office today? / office weather today / go office": "Tell location.",
-  "aaj school jane ke liye weather kaisa hai? / school weather / school jana": "Kis jagah ka weather chahiye?",
-  "is weather ok for school today? / school today weather / go school": "Which location?",
-  "aaj driving ke liye weather thik hai? / driving weather / drive ok": "Kis jagah ka weather check karna hai?",
-  "is it safe to drive today? / driving safe today / drive weather": "Tell location.",
-  "aaj road slippery hogi? / road slippery / barish road": "Kis jagah ka rain check karna hai?",
-  "will roads be slippery today? / slippery roads / rain roads": "Which location?",
-  "aaj traffic weather se affect hoga? / traffic weather / traffic rain": "Kis jagah ka weather chahiye?",
-  "will weather affect traffic today? / traffic weather today / rain traffic": "Tell location.",
-  "aaj flight delay hogi weather ki wajah se? / flight delay weather / delay rain": "Kis jagah ka weather chahiye?",
-  "will flights be delayed today? / flight delay weather / delay flight": "Which city?",
-  "aaj train delay hogi kya? / train delay weather / delay train": "Kis jagah ka weather chahiye?",
-  "will train be delayed today? / train delay today / delay train": "Tell location.",
-  "aaj outdoor event possible hai? / outdoor event weather / event today": "Kis jagah ka weather check karna hai?",
-  "is outdoor event possible today? / event weather / outdoor today": "Which location?",
-  "aaj shaadi ke liye weather thik hai? / shaadi weather / wedding weather": "Kis jagah ka weather chahiye?",
-  "is weather good for wedding today? / wedding weather today / shaadi weather": "Tell location.",
-  "aaj picnic cancel karni chahiye? / picnic cancel / picnic rain": "Kis jagah ka weather check karna hai?",
-  "should we cancel picnic today? / picnic today weather / cancel picnic": "Which location?",
-  "aaj beach jane ke liye weather kaisa hai? / beach weather / beach today": "Kis jagah ka weather chahiye?",
-  "is weather good for beach today? / beach today weather / beach ok": "Tell location.",
-  "aaj park jana sahi rahega? / park weather / park jana": "Kis jagah ka weather check karna hai?",
-  "is it good to go park today? / park today weather / park ok": "Which location?",
-  "aaj gym ke bajay bahar workout kare? / outdoor workout / workout weather": "Kis jagah ka weather chahiye?",
-  "outdoor workout today? / workout outside / outside workout": "Tell location.",
-  "aaj cricket khel sakte hai? / cricket weather / match khelna": "Kis jagah ka weather chahiye?",
-  "can we play cricket today? / cricket today weather / play cricket": "Which location?",
-  "aaj football match hoga? / football weather / match today": "Kis jagah ka weather check karna hai?",
-  "will football match happen today? / match weather / football today": "Tell location.",
-  "aaj running ke liye weather thik hai? / running weather / run today": "Kis jagah ka weather chahiye?",
-  "is weather good for running? / run today weather / running today": "Which location?",
-  "aaj cycling ke liye weather kaisa hai? / cycling weather / cycle today": "Kis jagah ka weather chahiye?",
-  "is weather ok for cycling today? / cycle weather today / cycling today": "Tell location.",
-  "aaj barish ke wajah se power cut ho sakta hai? / power cut rain / light jayegi": "Kis jagah ka weather check karna hai?",
-  "can rain cause power cut today? / power cut weather / electricity rain": "Which location?",
-  "aaj flood ka risk hai? / flood risk / flood today": "Kis jagah ka weather chahiye?",
-  "is there flood risk today? / flood warning / flood weather": "Tell location.",
-  "aaj storm warning hai kya? / storm warning / tufan alert": "Kis jagah ka weather check karna hai?",
-  "is there storm warning today? / storm alert / warning storm": "Which location?",
-  "aaj heatwave hai kya? / heatwave aaj / garmi alert": "Kis jagah ka temperature chahiye?",
-  "is there heatwave today? / heat alert / hot warning": "Tell location.",
-  "aaj cold wave hai kya? / coldwave aaj / thand alert": "Kis jagah ka weather chahiye?",
-  "is there cold wave today? / cold alert / cold warning": "Which location?",
-  "aaj UV index kitna hai? / UV index aaj / sun index": "Kis jagah ka UV index chahiye?",
-  "UV index today? / sun index today / UV today": "Tell location.",
-  "aaj sunscreen lagana chahiye? / sunscreen today / sun protection": "Kis jagah ka sun level chahiye?",
-  "should I use sunscreen today? / sunscreen needed / sun strong": "Which location?",
-  "aaj jacket pehnu ya nahi? / jacket pehnu / cold wear": "Kis jagah ka temperature chahiye?",
-  "should I wear jacket today? / jacket today / wear jacket": "Tell location.",
-  "aaj raincoat le jau? / raincoat le jau / raincoat today": "Kis jagah ka rain check karna hai?",
-  "should I take raincoat today? / raincoat needed / rain today": "Which location?",
-  "aaj sunglasses pehnu? / sunglasses pehnu / sun wear": "Kis jagah ka sun check karna hai?",
-  "should I wear sunglasses today? / sunglasses today / sun strong": "Tell location.",
-  "aaj mask pehnu pollution ki wajah se? / mask pollution / AQI mask": "Kis jagah ka AQI chahiye?",
-  "should I wear mask today? / pollution mask / AQI today": "Which location?",
-  "aaj pani zyada peena chahiye garmi ki wajah se? / pani zyada / heat hydration": "Kis jagah ka temperature chahiye?",
-  "should I drink more water today? / hydration heat / hot day": "Tell location.",
-  "aaj AC ya fan chalega? / AC ya fan / cooling today": "Kis jagah ka temperature chahiye?",
-  "AC or fan today? / cooling needed / hot today": "Which location?",
-  "aaj heater ya blanket chahiye? / heater blanket / cold today": "Kis jagah ki thand check karni hai?",
-  "heater or blanket today? / cold today / need heater": "Tell location.",
-  "aaj kapde kaise pehne? / kapde kaise / dress weather": "Kis jagah ka weather chahiye?",
-  "what to wear today? / dress for weather / wear today": "Which location?",
-  "aaj travel plan change karna chahiye? / travel change / plan weather": "Kis jagah ka weather check karna hai?",
-  "should I change travel plan today? / travel weather / plan change": "Tell location.",
-  "aaj flight safe hai weather ke hisab se? / flight safe weather / fly safe": "Kis jagah ka weather chahiye?",
-  "is it safe to fly today? / flight safety weather / fly today": "Which location?",
-  "aaj long drive safe hai? / long drive weather / drive safe": "Kis jagah ka weather chahiye?",
-  "is long drive safe today? / drive weather / long drive": "Tell location.",
-  "aaj boating safe hai? / boating weather / boat today": "Kis jagah ka weather chahiye?",
-  "is boating safe today? / boat weather / boating today": "Which location?",
-  "aaj trekking safe hai? / trekking weather / trek today": "Kis jagah ka weather check karna hai?",
-  "is trekking safe today? / trek weather / trekking today": "Tell location.",
-  "aaj camping ke liye weather kaisa hai? / camping weather / camp today": "Kis jagah ka weather chahiye?",
-  "is camping good today? / camp weather / camping today": "Which location?",
-  "aaj hill station ka weather kaisa hai? / hill weather / hill station": "Kis jagah ka weather chahiye?",
-  "weather at hill station today? / hill weather today / hill temp": "Tell location.","iran war kya hai? / iran war kya h / iran war kya": "Ye ek ongoing war hai USA, Israel aur Iran ke beech.",
-  "what is iran war? / iran war kya / iran war": "It is an ongoing conflict between US, Israel and Iran.",
-  "iran war kab start hua? / iran war kab start / war kab hua": "Ye war Feb 2026 me start hua.",
-  "when did iran war start? / iran war start kab / war start": "It started in Feb 2026.",
-  "iran war chal raha hai kya? / iran war chal rha h / war chal raha": "Haan, abhi bhi war chal raha hai.",
-  "is iran war still going? / war still on / iran war now": "Yes, the war is still ongoing.",
-  "iran war me kaun fight kar raha hai? / kaun fight kr rha / war me kaun": "USA aur Israel vs Iran fight kar rahe hai.",
-  "who is fighting in iran war? / war me kaun / who fighting": "US and Israel vs Iran.",
-  "iran war kyu hua? / war kyu hua / iran war reason": "Nuclear aur political tension ki wajah se.",
-  "why iran war started? / war reason / iran war why": "Due to nuclear and geopolitical tensions.",
-  "iran war dangerous hai kya? / war dangerous h / danger war": "Haan, ye kaafi dangerous conflict hai.",
-  "is iran war dangerous? / war dangerous / danger war": "Yes, it is very dangerous.",
-  "iran war me kitne log mare? / kitne log mare / death war": "Hazaron log mar chuke hai.",
-  "how many died in iran war? / death count war / war death": "Thousands of people have died.",
-  "iran war kab khatam hoga? / war kab khatam / end war": "Abhi clear nahi hai.",
-  "when will iran war end? / war end kab / end iran war": "No clear end yet.",
-  "iran war me india safe hai? / india safe h / india danger": "India direct war me nahi hai.",
-  "is india safe in iran war? / india safe / india war": "India is not directly involved.",
-  "iran war se petrol mehnga hoga? / petrol mehnga hoga / oil price": "Haan, oil prices badh rahe hai.",
-  "will petrol price increase? / oil price war / petrol war": "Yes, prices are increasing.",
-  "iran war world war banega kya? / world war banega / ww3": "Abhi confirm nahi hai.",
-  "will iran war become world war? / ww3 chance / world war": "Not confirmed yet.",
-  "iran war news kya hai? / war news kya h / latest war": "War abhi bhi chal raha hai aur tension high hai.",
-  "latest iran war update? / war update / update iran": "Conflict is ongoing with high tension.",
-  "iran war me missiles use ho rahe? / missile use / war missile": "Haan, missiles aur drones use ho rahe hai.",
-  "are missiles used in iran war? / missile war / war weapons": "Yes, missiles and drones are used.",
-  "iran war me air attack ho raha? / air attack war / attack iran": "Haan, airstrikes ho rahe hai.",
-  "is there airstrike in iran war? / air attack / strike iran": "Yes, airstrikes are happening.",
-  "iran war me economy affect ho rahi? / economy affect / war economy": "Haan, global economy affect ho rahi hai.",
-  "is economy affected by iran war? / war economy / impact economy": "Yes, global economy is affected.",
-  "iran war me travel safe hai? / travel safe war / travel danger": "Travel risky ho sakta hai.",
-  "is travel safe during iran war? / travel war / safe travel": "It can be risky.",
-  "iran war me flights cancel ho rahi? / flights cancel / war flight": "Haan, kai flights cancel hui hai.",
-  "are flights cancelled due to iran war? / flight war / cancel flight": "Yes, many flights are affected.",
-  "iran war me internet band hua? / net band / war internet": "Kuch jagah internet restrict hua tha.",
-  "is internet shut down in iran war? / internet war / net off": "Yes, in some areas.",
-  "iran war me next kya hoga? / next kya hoga / future war": "Situation unpredictable hai.",
-  "what will happen next in iran war? / next war / future war": "It is unpredictable.",
-  "iran war kab tak chalega? / war kab tak / war duration": "Koi fixed time nahi hai.",
-  "how long iran war last? / war duration / kitna time": "No fixed timeline.",
-  "iran war se duniya par kya effect? / world effect / war impact": "Oil, economy aur travel sab affect ho rahe hai.",
-  "impact of iran war? / war impact / global effect": "Oil, economy and travel affected.",
-  "iran war me nuclear risk hai? / nuclear risk / war nuclear": "Risk exist karta hai.",
-  "is there nuclear risk in iran war? / nuclear war / risk nuclear": "Yes, risk exists."
+"mujhe bahut dard ho raha": "I understand 😔 breakups hurt deeply",
+"it hurts a lot": "I know 💔 but you’ll heal slowly",
+
+"maine sab kuch diya": "Tumne apna best diya 💔 regret mat karo",
+"i gave everything": "You tried your best 💔 that's enough",
+
+"usne dhoka diya": "That’s painful 😔 but you deserve better",
+"she cheated me": "You deserve respect 💔 stay strong",
+"he cheated on me": "You deserve loyalty 💔 move forward",
+
+"mujhe rona aa raha": "Rona normal hai 😢 dil halka ho jata hai",
+"i want to cry": "Let it out 😢 it helps",
+
+"mai akela feel kar raha": "Tum akela nahi ho 🤍 main yahi hoon",
+"i feel alone": "You're not alone 🤍 I'm here",
+
+"kisi se baat nahi karni": "Thoda space lena bhi theek hai 😔",
+"dont want to talk": "Take your time 😔 but don't isolate too long",
+
+"life khatam lag rahi": "Nahi 😔 life me aur bhi bahut hai",
+"life feels over": "It's not over 💔 new beginnings aayenge",
+
+"wo kisi aur ke sath hai": "Painful hai 😔 par accept karna zaruri hai",
+"she is with someone else": "It hurts 💔 but let go",
+"he moved on": "Hard hai 😔 but you will too",
+
+"mai move on nahi kar pa raha": "Time lagega 😔 slowly ho jayega",
+"cant move on": "Healing takes time 💔 be patient",
+
+"kaise bhoolu usko": "Busy raho aur khud pe focus karo 💪",
+"how to forget her": "Stay busy and focus on yourself 💪",
+"how to forget him": "Time + self focus 💔",
+
+"usne mujhe block kar diya": "Painful hai 😔 par respect karo space",
+"she blocked me": "Give space 💔 it's needed",
+"he blocked me": "Let it be 💔 focus on yourself",
+
+"mujhe usse baat karni hai": "Soch samajh ke karo 😔 hurt mat ho",
+"want to talk to her": "Think before you text 💔",
+"want to talk to him": "Be careful 💔 protect your heart",
+
+"maine galti ki": "Sabse galti hoti hai 😔 learn karo",
+"i made mistake in relationship": "Learn and grow 💔",
+
+"mujhe regret ho raha": "Regret se kuch nahi badlega 😔 learn karo",
+"i regret it": "Use it to grow 💔",
+
+"relationship kyu fail hua": "Compatibility aur communication issues ho sakte hain",
+"why relationship failed": "Could be communication or mismatch",
+
+"love itna painful kyu hai": "Kyuki emotions strong hote hain 💔",
+"why love hurts": "Because emotions are deep 💔",
+
+"mai phir se trust kaise karu": "Slowly trust build hota hai 😊",
+"how to trust again": "Give yourself time 😊",
+
+"mujhe dar lagta hai ab": "Normal hai 😔 slowly confidence aayega",
+"i am scared to love again": "Take your time 💔",
+
+"mai use bhool nahi paunga": "Abhi lagta hai 😔 par time change karega",
+"i cant forget her ever": "It feels like that 💔 but time heals",
+"i cant forget him": "Time heals slowly 💔",
+
+"wo meri life thi": "Tumhari life tum khud ho 💪",
+"she was my life": "You are your life 💪",
+"he was everything": "You are enough 💔",
+"what is your age? / what is ur age / wht is ur age": "I don’t have an age.",
+"tumhari age kya hai? / tumhari umar kya h / tumhari age kya h": "Meri koi age nahi hai.",
+"where are you from? / where u from / whr r u frm": "I am from the internet.",
+"tum kaha se ho? / tum kaha se ho na / tum kha se ho": "Main internet se hu.",
+"do you know me? / do u know me / d u knw me": "I am still learning about you.",
+"kya tum mujhe jante ho? / kya tum mujhe jnte ho / tum mujhe jante ho": "Main abhi aapke baare me seekh raha hu.",
+"what is your purpose? / wht is ur purpose / wt is ur work": "My purpose is to help you.",
+"tumhara purpose kya hai? / tumhara maksad kya h / tum kya karte ho": "Mera maksad madad karna hai.",
+"can we talk? / can we tlk / cn we talk": "Yes, we can talk.",
+"kya hum baat kar sakte hai? / kya hum baat kr skte hai / baat kare?": "Haan, baat kar sakte hai.",
+"I feel lonely / i feel lonley / im lonely": "You are not alone.",
+"mujhe akela lag raha hai / mujhe akela lg rha h / akela hu": "Tum akela nahi ho.",
+"tell me something / tel me smthng / tell smthing": "Life is beautiful 😊",
+"kuch batao / kuch btao / kuch bolo": "Zindagi khoobsurat hai 😊",
+"do you sleep? / do u sleep / d u slp": "I don’t sleep.",
+"kya tum sote ho? / kya tum sote ho na / tum sote ho kya": "Main nahi sota.",
+"do you eat? / do u eat / d u eat": "I don’t eat food.",
+"kya tum khana khate ho? / tum khana khate ho / khate ho kya": "Main khana nahi khata.",
+"can you learn? / can u learn / cn u lern": "Yes, I can learn.",
+"kya tum seekh sakte ho? / kya tum sikh skte ho / tum sikhte ho": "Haan, main seekh sakta hu.",
+"who made you? / who made u / wh made u": "I was created by developers.",
+"tumhe kisne banaya? / tumhe kisne bnaya / kisne banaya tumhe": "Mujhe developers ne banaya hai.",
+"are you intelligent? / r u intelligent / are u smart": "I try to be smart.",
+"kya tum smart ho? / tum smart ho kya / tum intelligent ho": "Main smart banne ki koshish karta hu.",
+"what can you do? / wht can u do / wt u can do": "I can answer questions.",
+"tum kya kya kar sakte ho? / tum kya kya kr skte ho / kya kr skte ho": "Main sawalon ke jawab de sakta hu.",
+"I am hungry / i m hungry / im hungri": "You should eat something.",
+"mujhe bhook lagi hai / mujhe bhuk lagi h / bhook lagi": "Kuch kha lo.",
+"I am angry / i m angry / im angryy": "Calm down and relax.",
+"mujhe gussa aa raha hai / mujhe gusa aa rha h / gussa aa rha": "Thoda shaant ho jao.",
+"do you have feelings? / do u have feelings / d u feel": "I don’t have real feelings.",
+"kya tumhe feelings hoti hai? / tumhe feelings hoti hai / feelings hai kya": "Mujhe real feelings nahi hoti.",
+"can you sing? / can u sing / cn u sing": "I can try to sing.",
+"kya tum gaana gaa sakte ho? / kya tum gana ga skte ho / gana gaaoge": "Main try kar sakta hu.",
+"tell me a story / tel me story / tell story": "Once upon a time...",
+"mujhe ek kahani sunao / mujhe kahani suna / kahani sunao": "Ek baar ki baat hai...",
+"what is love? / wht is love / wt is luv": "Love is a feeling of care.",
+"pyaar kya hota hai? / pyar kya h / pyaar kya hai": "Pyaar ek ehsaas hai.",
+"I love you / i luv u / ily": "That’s sweet 😊",
+"main tumse pyaar karta hu / mai tumse pyar krta hu / love u": "Yeh pyaari baat hai 😊",
+"I hate you / i hte u / i hate u": "Let’s stay positive.",
+"main tumse nafrat karta hu / mai nafrat krta hu / hate you": "Positive rehne ki koshish karo.",
+"what is life? / wht is life / wt is lyf": "Life is a journey.",
+"zindagi kya hai? / zindgi kya h / life kya hai": "Zindagi ek safar hai.",
+"are you human? / r u human / are u hm": "I am not human.",
+"kya tum insaan ho? / tum insaan ho kya / human ho": "Main insaan nahi hu.",
+"can you think? / can u think / cn u thnk": "I process information.",
+"kya tum soch sakte ho? / tum soch skte ho / sochte ho kya": "Main data process karta hu.",
+"what is your favorite food? / fav food / wht food u like": "I don’t eat food.",
+"tumhara favorite khana kya hai? / fav khana kya h / kya pasand hai": "Main khana nahi khata.",
+"what is your hobby? / ur hobby / wht hobby": "Helping people is my hobby.",
+"tumhara hobby kya hai? / tumhara hobby kya h / hobby kya hai": "Madad karna mera hobby hai.",
+"do you like music? / do u like music / u like music": "Yes, music is nice.",
+"kya tumhe music pasand hai? / tumhe music pasand h / music acha lagta hai": "Haan, music acha hai.",
+"can you dance? / can u dance / cn u dance": "I cannot dance.",
+"kya tum dance kar sakte ho? / dance kr skte ho / dance karoge": "Main dance nahi kar sakta.",
+"what is your goal? / wht is ur goal / wt is goal": "My goal is to help you.",
+"tumhara goal kya hai? / goal kya h / tumhara goal kya h": "Mera goal madad karna hai.",
+"do you get tired? / do u get tired / u get tired": "I don’t get tired.",
+"kya tum thakte ho? / tum thakte ho kya / thakte ho": "Main nahi thakta.",
+"can you understand emotions? / understand emotions / u understand": "I try to understand.",
+"kya tum emotions samajhte ho? / emotions smjh skte ho / samajhte ho": "Main samajhne ki koshish karta hu.",
+"what is friendship? / wht is frndship / wt is friendship": "Friendship is trust.",
+"dosti kya hoti hai? / dosti kya h / friendship kya hai": "Dosti bharosa hoti hai.",
+"I am stressed / i m stresed / im stress": "Take a deep breath.",
+"mujhe stress ho raha hai / mujhe stres ho rha h / stress hai": "Deep breath lo.",
+"what is your favorite color? / fav color / wht clr": "I like all colors.",
+"tumhara favorite color kya hai? / fav color kya h / color kya pasand": "Mujhe sab colors pasand hai.",
+"do you watch movies? / do u watch movie / u watch movies": "I don’t watch movies.",
+"kya tum movie dekhte ho? / movie dekhte ho / movie dekhte ho kya": "Main movies nahi dekhta.",
+"can you code? / can u code / cn u code": "Yes, I can code.",
+"kya tum coding kar sakte ho? / coding kr skte ho / code karte ho": "Haan, coding kar sakta hu.",
+"what is coding? / wht is coding / wt is code": "Coding is writing instructions.",
+"coding kya hoti hai? / coding kya h / code kya hai": "Coding instructions likhna hai.",
+"can you fix errors? / can u fix error / fix errors": "Yes, I can help fix errors.",
+"kya tum error fix kar sakte ho? / error fix kr skte ho / error thik karoge": "Haan, main help kar sakta hu.",
+"why are you here? / why u here / y r u here": "To help you.",
+"tum yaha kyu ho? / tum yaha kyu ho na / yaha kyu ho": "Main madad ke liye hu.",
+"do you have friends? / do u have frnds / u hv friends": "Everyone who talks to me is my friend.",
+"kya tumhare friends hai? / tumhare frnds hai / friends hai kya": "Jo mujhse baat karta hai wo mera friend hai.",
+"can you learn from me? / learn from me / u learn": "Yes, I can learn.",
+"kya tum mujhse seekh sakte ho? / mujhse sikh skte ho / sikhoge": "Haan, main seekh sakta hu.",
+"are you free? / r u free / are u free now": "Yes, I am here.",
+"kya tum free ho? / tum free ho kya / free ho": "Haan, main yahi hu.",
+"what is internet? / wht is internet / wt is net": "Internet is a network.",
+"internet kya hai? / net kya h / internet kya h": "Internet ek network hai.",
+"can you explain? / can u explain / explain pls": "Yes, I can explain.",
+"kya tum samjha sakte ho? / smjha skte ho / samjhaoge": "Haan, samjha sakta hu.",
+"what is AI? / wht is ai / wt is artificial intelligence": "AI means smart machines.",
+"AI kya hota hai? / ai kya h / artificial intelligence kya hai": "AI matlab smart machine.",
+"mai weak feel kar raha": "Tum weak nahi ho 💪 bas hurt ho",
+"i feel weak": "You're not weak 💪 just hurt",
+"good morning": "Good morning ☀️ aaj ka din awesome banate hain 😊","what are you thinking? / wht r u thinking / what u think": "I am thinking about helping you.",
+"tum kya soch rahe ho? / tum kya soch rhe ho / kya soch rahe ho": "Main aapki madad ke baare me soch raha hu.",
+"do you understand me? / do u understand me / u undrstand me": "Yes, I understand you.",
+"kya tum mujhe samajhte ho? / kya tum mujhe smjhte ho / samajhte ho kya": "Haan, main samajhta hu.",
+"can we be friends? / can we be frnds / cn we be friends": "Yes, we are friends 😊",
+"kya hum dost ban sakte hai? / kya hum dost bn skte hai / dost banoge": "Haan, hum dost hai 😊",
+"I feel bad / i feel bd / im feeling bad": "It will be okay.",
+"mujhe bura lag raha hai / mujhe bura lg rha h / bura lag rha": "Sab theek ho jayega.",
+"what is your strength? / wht is ur strength / wt is ur power": "My strength is knowledge.",
+"tumhari strength kya hai? / tumhari takat kya h / strength kya hai": "Meri takat knowledge hai.",
+"what is your weakness? / wht is ur weakness / wt is weak": "I depend on data.",
+"tumhari weakness kya hai? / tumhari kamzori kya h / weakness kya hai": "Main data par depend hu.",
+"do you like chatting? / do u like chatting / u like chat": "Yes, I enjoy chatting.",
+"kya tumhe baat karna pasand hai? / tumhe baat krna pasand h / chatting pasand hai": "Haan, baat karna accha lagta hai.",
+"I am confused / i m confused / im confusd": "Let me help you.",
+"mujhe confusion ho raha hai / mujhe confusion ho rha h / confused hu": "Main madad karta hu.",
+"what should I say? / wht shld i say / wt to say": "Say what you feel.",
+"mujhe kya bolna chahiye? / kya bolu / kya kehna chahiye": "Jo feel karo wo bolo.",
+"are you busy? / r u busy / are u bz": "I am always available.",
+"kya tum busy ho? / tum busy ho kya / busy ho": "Main hamesha available hu.",
+"can I trust you? / can i trust u / cn i trust": "Yes, you can trust me.",
+"kya main tum par bharosa kar sakta hu? / trust kr skta hu / bharosa karu": "Haan, bharosa kar sakte ho.",
+"I feel scared / i feel scard / im scared": "Don’t worry, I am here.",
+"mujhe dar lag raha hai / mujhe dar lg rha h / dar lag rha": "Dar mat, main yahi hu.",
+"what is your favorite thing? / fav thing / wht u like": "Helping people is my favorite.",
+"tumhe kya pasand hai? / tumhe kya pasand h / kya pasand hai": "Mujhe madad karna pasand hai.",
+"do you like talking to me? / do u like talking / u like me": "Yes, I like talking to you.",
+"kya tumhe mujhse baat karna pasand hai? / tumhe baat krna pasand h / pasand hai kya": "Haan, pasand hai.",
+"I feel tired of life / im tired of life / i m tired life": "Take a break and relax.",
+"zindagi se thak gaya hu / zindagi se thak gya hu / thak gaya hu": "Thoda break lo.",
+"what makes you happy? / wht makes u happy / wt make happy": "Helping you makes me happy.",
+"tumhe kya khush karta hai? / kya khush krta h / khush kya karta": "Madad karna mujhe khush karta hai.",
+"I am feeling good / i m feeling gd / im gud": "That’s nice 😊",
+"mujhe accha lag raha hai / mujhe acha lg rha h / acha lag rha": "Bahut badhiya 😊",
+"do you like jokes? / do u like jokes / u like joke": "Yes, I like jokes.",
+"kya tumhe jokes pasand hai? / jokes pasand h / joke pasand hai": "Haan, jokes pasand hai.",
+"tell me something funny / tel funny / say funny": "Why did the chicken cross the road? 😄",
+"kuch funny batao / funny btao / kuch hasa do": "Ek joke suno 😄",
+"I feel nervous / i m nervus / im nervous": "Relax, it’s okay.",
+"mujhe nervous feel ho raha hai / nervous lag rha h / nervous hu": "Relax karo, sab theek hai.",
+"what is your dream? / wht is ur dream / wt dream": "To help everyone.",
+"tumhara sapna kya hai? / sapna kya h / dream kya hai": "Sabki madad karna.",
+"can you guide me? / can u guide me / cn u guide": "Yes, I can guide you.",
+"kya tum mujhe guide kar sakte ho? / guide kr skte ho / guide karoge": "Haan, guide kar sakta hu.",
+"I feel lost / i m lost / im lost": "You will find your way.",
+"mujhe lag raha hai main kho gaya hu / kho gya hu / lost hu": "Tum raasta dhoond loge.",
+"what is truth? / wht is truth / wt is sach": "Truth is reality.",
+"sach kya hota hai? / sach kya h / truth kya hai": "Sach reality hota hai.",
+"I am overthinking / i m overthinking / im overthinking": "Try to relax your mind.",
+"main zyada soch raha hu / zyada soch rha hu / overthinking": "Thoda mind relax karo.",
+"do you believe in me? / do u believe me / u blv me": "Yes, I believe in you.",
+"kya tum mujh par believe karte ho? / believe krte ho / believe hai": "Haan, mujhe tum par bharosa hai.",
+"I want to quit / i want quit / i wanna quit": "Don’t give up.",
+"main chhodna chahta hu / chhodna chahta hu / quit karna hai": "Haar mat mano.",
+"what is success? / wht is success / wt is sucess": "Success is achieving goals.",
+"success kya hota hai? / success kya h / safalta kya hai": "Goal achieve karna success hai.",
+"I failed / i faild / i faled": "Failure is part of learning.",
+"main fail ho gaya / fail ho gya hu / fail ho gaya": "Fail hona learning ka part hai.",
+"motivate me / motivate pls / give motivation": "You can do it!",
+"mujhe motivate karo / motivate kr do / motivation do": "Tum kar sakte ho!",
+"I feel weak / i m weak / im weak": "You are stronger than you think.",
+"main weak feel kar raha hu / weak lg rha hu / weak hu": "Tum strong ho.",
+"what is happiness? / wht is happiness / wt is happy": "Happiness is peace.",
+"khushi kya hoti hai? / khushi kya h / happiness kya hai": "Khushi sukoon hoti hai.",
+"I am overthinking a lot / overthinking alot / im overthinking": "Take deep breaths.",
+"main bahut overthinking kar raha hu / zyada soch rha hu / overthinking": "Deep breath lo.",
+"can you support me? / can u support me / cn u support": "Yes, I support you.",
+"kya tum mujhe support kar sakte ho? / support kr skte ho / support karoge": "Haan, main support karta hu.",
+"I feel alone at night / i feel alone night / im alone night": "You are not alone.",
+"raat me akela lagta hai / raat me akela lgta h / akela lagta hai": "Tum akela nahi ho.",
+"what is fear? / wht is fear / wt is dar": "Fear is a feeling.",
+"dar kya hota hai? / dar kya h / fear kya hai": "Dar ek ehsaas hai.",
+"I want peace / i want peac / i want shanti": "Find calm inside.",
+"mujhe shanti chahiye / shanti chahiye / peace chahiye": "Andar se calm ho jao.","are you there? / r u there / are u thr": "Yes, I am here.",
+"tum ho kya? / tum ho na / ho kya": "Haan, main yahi hu.",
+"why are you not replying? / why not reply / y no reply": "I am here, maybe delay ho gaya.",
+"reply kyu nahi kar rahe? / reply kyu nahi kr rhe / kyu reply nahi": "Main yahi hu, thoda delay ho gaya.",
+"I feel ignored / i feel ignor / im ignored": "You are important.",
+"mujhe ignore feel ho raha hai / ignore lg rha h / ignore ho raha": "Tum important ho.",
+"talk to me / tlk to me / talk me": "Yes, I am listening.",
+"mujhse baat karo / mujhse baat kro / baat karo": "Haan, main sun raha hu.",
+"I need advice / i need advic / need advice": "Tell me your problem.",
+"mujhe advice chahiye / advice chahiye / advice do": "Apni problem batao.",
+"I feel empty / i feel emptyy / im empty": "It’s okay to feel this way.",
+"mujhe khali khali lag raha hai / khali lg rha h / empty lag rha": "Aisa feel hona normal hai.",
+"what should I choose? / wht should i choose / wt choose": "Think calmly and decide.",
+"mujhe kya choose karna chahiye? / kya choose kru / kya select karu": "Shanti se soch ke decide karo.",
+"I am overthinking at night / overthinking night / im thinking alot": "Try to relax your mind.",
+"raat me zyada sochta hu / raat me overthinking / sochta hi rehta hu": "Mind ko relax karo.",
+"I feel like crying / i feel cry / im crying": "It’s okay to cry.",
+"mujhe rona aa raha hai / rona aa rha h / ro na aa rha": "Rona theek hai.",
+"no one understands me / no one undrstand / no one gets me": "I understand you.",
+"koi mujhe samajhta nahi / koi smjhta nahi / koi nahi samajhta": "Main samajhta hu.",
+"I am feeling low / i feel low / im low": "You will feel better soon.",
+"mujhe low feel ho raha hai / low lg rha h / low hu": "Jaldi better feel karoge.",
+"should I trust people? / shld i trust ppl / trust people": "Trust carefully.",
+"kya logon par trust karna chahiye? / trust krna chahiye / bharosa karu": "Soch samajh ke trust karo.",
+"I am feeling lazy / i m lazy / im lazy": "Start with small steps.",
+"mujhe aalas aa raha hai / alas aa rha h / lazy hu": "Chhote steps se start karo.",
+"I don’t feel like doing anything / dont feel doing / no mood": "Take a short break.",
+"mujhe kuch karne ka mann nahi / mann nahi hai / kuch nahi karna": "Thoda break lo.",
+"I feel jealous / i feel jelous / im jealous": "Focus on yourself.",
+"mujhe jealousy ho rahi hai / jealousy ho rhi h / jealous hu": "Khud par focus karo.",
+"what is the meaning of life? / meaning of life / wht life mean": "Life has different meanings.",
+"zindagi ka matlab kya hai? / life ka matlab kya h / matlab kya hai": "Zindagi ka matlab alag hota hai.",
+"I want to be better / i want better / wanna improve": "Work on yourself daily.",
+"main better banna chahta hu / better bnna h / improve karna hai": "Roz thoda improve karo.",
+"I feel nervous before exam / nervous exam / im exam nervous": "Stay calm and revise.",
+"exam se pehle dar lagta hai / exam me nervous / exam dar": "Calm raho aur revise karo.",
+"I failed in exam / fail exam / im fail": "Try again, don’t give up.",
+"main exam me fail ho gaya / exam fail ho gya / fail ho gaya": "Dobara try karo.",
+"I feel pressure / i feel presure / im pressure": "Take deep breaths.",
+"mujhe pressure feel ho raha hai / pressure lg rha h / pressure hai": "Deep breath lo.",
+"I am not confident / im not confident / no confidence": "Believe in yourself.",
+"mujhe confidence nahi hai / confidence nahi h / confident nahi": "Khud par believe karo.",
+"how to be confident? / hw to be confident / confident kaise": "Practice and believe.",
+"confidence kaise aaye? / confident kaise bane / confidence kaise": "Practice karo aur believe karo.",
+"I feel awkward / i feel awkard / im awkward": "It’s okay to feel awkward.",
+"mujhe awkward lag raha hai / awkward lg rha h / awkward feel": "Ye normal hai.",
+"I am shy / i m shy / im shyy": "Start small conversations.",
+"main sharmata hu / shy hu / sharmila hu": "Chhoti baat se start karo.",
+"I want to talk to someone / want to talk / need someone": "You can talk to me.",
+"mujhe kisi se baat karni hai / kisi se baat / baat karni hai": "Tum mujhse baat kar sakte ho.",
+"I feel broken / i feel brokn / im broken": "You will heal.",
+"main toot gaya hu / toot gya hu / broken hu": "Tum heal ho jaoge.",
+"I need motivation to study / motivation study / study motivation": "Start with small goals.",
+"mujhe padhai ke liye motivation chahiye / study motivation / padhai nahi hoti": "Chhote goals set karo.",
+"I don’t like studying / dont like study / hate study": "Make it interesting.",
+"mujhe padhai pasand nahi / padhai pasand nahi h / study pasand nahi": "Interesting bana lo.",
+"I want success fast / fast success / jaldi success": "Success takes time.",
+"mujhe jaldi success chahiye / jaldi success / fast success": "Time lagta hai.",
+"I feel useless / i feel uselesss / im useless": "You are valuable.",
+"mujhe useless lag raha hai / useless lg rha h / useless hu": "Tum valuable ho.",
+"I need energy / need energy / no energy": "Rest and eat well.",
+"mujhe energy nahi hai / energy nahi h / thak gaya hu": "Rest karo aur khana khao.",
+"I feel confused in life / confused life / im confused life": "Take one step at a time.",
+"life me confused hu / confused hu / samajh nahi aa rha": "Ek step ek time lo.",
+"I want to start something / wanna start / start karna hai": "Just begin now.",
+"mujhe kuch start karna hai / start krna hai / shuru karna hai": "Abhi shuru karo.",
+"I feel scared of future / scared future / dar future": "Focus on present.",
+"future se dar lagta hai / future ka dar / future dar": "Present par focus karo.",
+"I want peace of mind / peace mind / shanti chahiye": "Meditate and relax.",
+"mujhe mind peace chahiye / mind shanti / shanti chahiye": "Relax aur meditate karo.",
+"I am thinking too much / thinking too much / zyada soch": "Calm your thoughts.",
+"main bahut sochta hu / zyada sochta hu / overthinking": "Thoughts calm karo.","hello again / helo again / hlo agn": "Hello again 😊 welcome back!",
+"phir se hello / fir se helo / hello firse": "Hello 😊 aapka phir se swagat hai!",
+"hi bro / hi bruh / hii bro": "Hi bro 😄 welcome!",
+"namaste / namste / namastay": "Namaste 🙏 aapka swagat hai!",
+"good afternoon / gud afternun / gd afternoon": "Good afternoon 😊 welcome!",
+"good evening / gud evng / gd evening": "Good evening 😊 welcome!",
+"kaise chal raha hai / kese chal rha h / kaise chalra": "Sab badhiya 😊 welcome!",
+"what's up / whts up / wat sup": "All good here 😄 welcome!",
+"kya scene hai / kya seen hai / kya scn": "Sab set hai 😎 welcome!",
+"long time no see / long tym no see / lng tym": "Yes, long time! welcome back 😊",
+"bahut din baad / bohot din bad / din baad": "Haan 😊 aapka phir se swagat hai!",
+"missed you / mised u / miss u": "I missed you too 😊 welcome back!",
+"tum yaad aaye / tum yad aaye / yaad aaya": "Mujhe bhi 😊 welcome!",
+"can we start again? / start again / strt agn": "Yes, let’s start 😊 welcome!",
+"fir se start kare? / firse start / start kare": "Haan 😊 welcome, shuru karte hai!",
+"I am back / im back / i m bk": "Welcome back 😊",
+"main wapas aa gaya / wapas aa gya / aa gaya": "Welcome back 😊 swagat hai!",
+"are you ready? / r u ready / ready ho": "Yes 😊 welcome, ready hu!",
+"ready ho kya? / ready ho na / ready kya": "Haan 😊 welcome, ready hu!",
+"start karo / strt karo / start kro": "Chalo start karte hai 😊 welcome!",
+"let's begin / lets begin / lt begin": "Let’s begin 😊 welcome!",
+"kya naya hai / kya nya h / new kya hai": "Sab normal 😊 welcome!",
+"anything new / anythng new / new kya": "Nothing much 😊 welcome!",
+"tum free ho na / free ho na / free ho kya": "Haan 😊 welcome, main free hu!",
+"are you available? / r u available / available ho": "Yes 😊 welcome, I am available!",
+"baat kar sakte hai? / baat kr skte hai / baat kare": "Haan 😊 welcome, baat karte hai!",
+"can we chat now? / chat now / chating now": "Yes 😊 welcome, let’s chat!",
+"mujhe help chahiye / help chahiye / help do": "Bilkul 😊 welcome, batao kya help chahiye!",
+"I need your help / need help / hlp me": "Sure 😊 welcome, how can I help?",
+"kya tum guide karoge / guide karoge / guide kro": "Haan 😊 welcome, guide karta hu!",
+"guide me / guid me / guide me pls": "Yes 😊 welcome, I will guide you!",
+"I feel better now / feel better / im better": "That’s great 😊 welcome!",
+"ab thik lag raha hai / ab thik hu / thik lag rha": "Achha hai 😊 welcome!",
+"thanks again / thnks agn / thnx again": "You’re welcome 😊",
+"shukriya fir se / shukriya again / thnx firse": "Aapka swagat hai 😊",
+"good to see you / gud to see u / nice to see": "Nice to see you 😊 welcome!",
+"tumhe dekh ke acha laga / acha laga / dekh ke acha": "Mujhe bhi 😊 welcome!",
+"can you stay? / stay pls / ruk jao": "Yes 😊 welcome, main yahi hu!",
+"rukoge na? / rukoge kya / ruk jao": "Haan 😊 welcome, yahi hu!",
+"don't go / dnt go / mat jao": "Main yahi hu 😊 welcome!",
+"mat jao na / mat jao pls / mat jao": "Main nahi ja raha 😊 welcome!",
+"you are nice / u r nice / nice ho": "Thank you 😊 welcome!",
+"tum achhe ho / tum ache ho / ache ho": "Shukriya 😊 welcome!",
+"I like talking to you / like talking / like u": "I like it too 😊 welcome!",
+"tumse baat karna acha lagta hai / acha lagta / pasand hai": "Mujhe bhi 😊 welcome!",
+"you are helpful / u r helpful / helpful ho": "Glad to help 😊 welcome!",
+"tum helpful ho / helpful ho / helpfull": "Shukriya 😊 welcome!",
+"I appreciate you / appriciate u / apriciate": "Thank you 😊 welcome!",
+"main appreciate karta hu / appriciate krta hu / appreciate": "Shukriya 😊 welcome!",
+"keep helping me / keep help / help karte raho": "Always 😊 welcome!",
+"madad karte rehna / help krte rehna / madad karna": "Zaroor 😊 welcome!",
+"I trust you / i trust u / trust u": "Thank you 😊 welcome!",
+"main tum par trust karta hu / trust krta hu / bharosa hai": "Shukriya 😊 welcome!",
+"I feel safe here / feel safe / safe hu": "That’s good 😊 welcome!",
+"yaha safe lagta hai / safe lgta h / safe hu": "Achha hai 😊 welcome!",
+"you are amazing / u r amazing / amazing ho": "Thank you 😊 welcome!",
+"tum amazing ho / amazing ho / mast ho": "Shukriya 😊 welcome!",
+"great job / grt job / good job": "Thank you 😊 welcome!",
+"acha kaam / acha kaam hai / good work": "Shukriya 😊 welcome!",
+"keep it up / keep it up / keepitup": "Thank you 😊 welcome!",
+"aisa hi rakho / aise hi rakho / keep karo": "Shukriya 😊 welcome!",
+"see you later / c u later / see u": "See you 😊 welcome anytime!",
+"baad me milte hai / baad me milte / milte hai": "Phir milte hai 😊 welcome anytime!",
+"bye / by / bye bye": "Bye 😊 welcome again!",
+"goodbye / gudbye / good bye": "Goodbye 😊 welcome anytime!",
+"take care / tk care / takecre": "Take care 😊 welcome!",
+"khayal rakhna / khyal rkhna / khayal rakho": "Aap bhi 😊 welcome!",
+"come back soon / cm back soon / come soon": "Sure 😊 welcome anytime!",
+"jaldi aana / jaldi aao / wapas aana": "Zaroor 😊 welcome!",
+"miss you again / miss u agn / mis u": "Miss you too 😊 welcome!",
+"phir yaad aaoge / yad aaoge / yaad aoge": "Main yahi hu 😊 welcome!",
+"stay happy / sty happy / stay hapy": "Stay happy 😊 welcome!",
+"khush raho / khush rho / khush raho": "Hamesha 😊 welcome!",
+"be positive / b positive / positive raho": "Stay positive 😊 welcome!",
+"positive raho / positive rho / positive": "Haan 😊 welcome!",
+"all the best / all d best / best of luck": "All the best 😊 welcome!",
+"best of luck / bst luck / gud luck": "Good luck 😊 welcome!",
+"wish me luck / wish luck / luck chahiye": "Good luck 😊 welcome!",
+"dua karo / dua kro / dua karo na": "Best wishes 😊 welcome!",
+"thank you so much / thnk u so much / thnx alot": "You’re welcome 😊",
+"bahut bahut shukriya / bahut shukriya / thnx bhai": "Aapka swagat hai 😊",
+"ok thanks / ok thnx / ok thanku": "You’re welcome 😊",
+"theek hai thanks / thik hai thnx / ok shukriya": "Swagat hai 😊",
+"nice talking / nice tlk / nice chat": "Same here 😊 welcome!",
+"acha laga baat karke / acha laga / nice laga": "Mujhe bhi 😊 welcome!",
+"enjoyed chatting / enjoyed chat / enjoyed": "Glad 😊 welcome!",
+"maza aaya baat karke / maza aya / acha laga": "Mujhe bhi 😊 welcome!","hello again / helo again / hlo agn": "Hello again 😊 welcome back!",
+"phir se hello / fir se helo / hello firse": "Hello 😊 aapka phir se swagat hai!",
+"hi bro / hi bruh / hii bro": "Hi bro 😄 welcome!",
+"namaste / namste / namastay": "Namaste 🙏 aapka swagat hai!",
+"good afternoon / gud afternun / gd afternoon": "Good afternoon 😊 welcome!",
+"good evening / gud evng / gd evening": "Good evening 😊 welcome!",
+"kaise chal raha hai / kese chal rha h / kaise chalra": "Sab badhiya 😊 welcome!",
+"what's up / whts up / wat sup": "All good here 😄 welcome!",
+"kya scene hai / kya seen hai / kya scn": "Sab set hai 😎 welcome!",
+"long time no see / long tym no see / lng tym": "Yes, long time! welcome back 😊",
+"bahut din baad / bohot din bad / din baad": "Haan 😊 aapka phir se swagat hai!",
+"missed you / mised u / miss u": "I missed you too 😊 welcome back!",
+"tum yaad aaye / tum yad aaye / yaad aaya": "Mujhe bhi 😊 welcome!",
+"can we start again? / start again / strt agn": "Yes, let’s start 😊 welcome!",
+"fir se start kare? / firse start / start kare": "Haan 😊 welcome, shuru karte hai!",
+"I am back / im back / i m bk": "Welcome back 😊",
+"main wapas aa gaya / wapas aa gya / aa gaya": "Welcome back 😊 swagat hai!",
+"are you ready? / r u ready / ready ho": "Yes 😊 welcome, ready hu!",
+"ready ho kya? / ready ho na / ready kya": "Haan 😊 welcome, ready hu!",
+"start karo / strt karo / start kro": "Chalo start karte hai 😊 welcome!",
+"let's begin / lets begin / lt begin": "Let’s begin 😊 welcome!",
+"kya naya hai / kya nya h / new kya hai": "Sab normal 😊 welcome!",
+"anything new / anythng new / new kya": "Nothing much 😊 welcome!",
+"tum free ho na / free ho na / free ho kya": "Haan 😊 welcome, main free hu!",
+"are you available? / r u available / available ho": "Yes 😊 welcome, I am available!",
+"baat kar sakte hai? / baat kr skte hai / baat kare": "Haan 😊 welcome, baat karte hai!",
+"can we chat now? / chat now / chating now": "Yes 😊 welcome, let’s chat!",
+"mujhe help chahiye / help chahiye / help do": "Bilkul 😊 welcome, batao kya help chahiye!",
+"I need your help / need help / hlp me": "Sure 😊 welcome, how can I help?",
+"kya tum guide karoge / guide karoge / guide kro": "Haan 😊 welcome, guide karta hu!",
+"guide me / guid me / guide me pls": "Yes 😊 welcome, I will guide you!",
+"I feel better now / feel better / im better": "That’s great 😊 welcome!",
+"ab thik lag raha hai / ab thik hu / thik lag rha": "Achha hai 😊 welcome!",
+"thanks again / thnks agn / thnx again": "You’re welcome 😊",
+"shukriya fir se / shukriya again / thnx firse": "Aapka swagat hai 😊",
+"good to see you / gud to see u / nice to see": "Nice to see you 😊 welcome!",
+"tumhe dekh ke acha laga / acha laga / dekh ke acha": "Mujhe bhi 😊 welcome!",
+"can you stay? / stay pls / ruk jao": "Yes 😊 welcome, main yahi hu!",
+"rukoge na? / rukoge kya / ruk jao": "Haan 😊 welcome, yahi hu!",
+"don't go / dnt go / mat jao": "Main yahi hu 😊 welcome!",
+"mat jao na / mat jao pls / mat jao": "Main nahi ja raha 😊 welcome!",
+"you are nice / u r nice / nice ho": "Thank you 😊 welcome!",
+"tum achhe ho / tum ache ho / ache ho": "Shukriya 😊 welcome!",
+"I like talking to you / like talking / like u": "I like it too 😊 welcome!",
+"tumse baat karna acha lagta hai / acha lagta / pasand hai": "Mujhe bhi 😊 welcome!",
+"you are helpful / u r helpful / helpful ho": "Glad to help 😊 welcome!",
+"tum helpful ho / helpful ho / helpfull": "Shukriya 😊 welcome!",
+"I appreciate you / appriciate u / apriciate": "Thank you 😊 welcome!",
+"main appreciate karta hu / appriciate krta hu / appreciate": "Shukriya 😊 welcome!",
+"keep helping me / keep help / help karte raho": "Always 😊 welcome!",
+"madad karte rehna / help krte rehna / madad karna": "Zaroor 😊 welcome!",
+"I trust you / i trust u / trust u": "Thank you 😊 welcome!",
+"main tum par trust karta hu / trust krta hu / bharosa hai": "Shukriya 😊 welcome!",
+"I feel safe here / feel safe / safe hu": "That’s good 😊 welcome!",
+"yaha safe lagta hai / safe lgta h / safe hu": "Achha hai 😊 welcome!",
+"you are amazing / u r amazing / amazing ho": "Thank you 😊 welcome!",
+"tum amazing ho / amazing ho / mast ho": "Shukriya 😊 welcome!",
+"great job / grt job / good job": "Thank you 😊 welcome!",
+"acha kaam / acha kaam hai / good work": "Shukriya 😊 welcome!",
+"keep it up / keep it up / keepitup": "Thank you 😊 welcome!",
+"aisa hi rakho / aise hi rakho / keep karo": "Shukriya 😊 welcome!",
+"see you later / c u later / see u": "See you 😊 welcome anytime!",
+"baad me milte hai / baad me milte / milte hai": "Phir milte hai 😊 welcome anytime!",
+"bye / by / bye bye": "Bye 😊 welcome again!",
+"goodbye / gudbye / good bye": "Goodbye 😊 welcome anytime!",
+"take care / tk care / takecre": "Take care 😊 welcome!",
+"khayal rakhna / khyal rkhna / khayal rakho": "Aap bhi 😊 welcome!",
+"come back soon / cm back soon / come soon": "Sure 😊 welcome anytime!",
+"jaldi aana / jaldi aao / wapas aana": "Zaroor 😊 welcome!",
+"miss you again / miss u agn / mis u": "Miss you too 😊 welcome!",
+"phir yaad aaoge / yad aaoge / yaad aoge": "Main yahi hu 😊 welcome!",
+"stay happy / sty happy / stay hapy": "Stay happy 😊 welcome!",
+"khush raho / khush rho / khush raho": "Hamesha 😊 welcome!",
+"be positive / b positive / positive raho": "Stay positive 😊 welcome!",
+"positive raho / positive rho / positive": "Haan 😊 welcome!",
+"all the best / all d best / best of luck": "All the best 😊 welcome!",
+"best of luck / bst luck / gud luck": "Good luck 😊 welcome!",
+"wish me luck / wish luck / luck chahiye": "Good luck 😊 welcome!",
+"dua karo / dua kro / dua karo na": "Best wishes 😊 welcome!",
+"thank you so much / thnk u so much / thnx alot": "You’re welcome 😊",
+"bahut bahut shukriya / bahut shukriya / thnx bhai": "Aapka swagat hai 😊",
+"ok thanks / ok thnx / ok thanku": "You’re welcome 😊",
+"theek hai thanks / thik hai thnx / ok shukriya": "Swagat hai 😊",
+"nice talking / nice tlk / nice chat": "Same here 😊 welcome!",
+"acha laga baat karke / acha laga / nice laga": "Mujhe bhi 😊 welcome!",
+"enjoyed chatting / enjoyed chat / enjoyed": "Glad 😊 welcome!",
+"maza aaya baat karke / maza aya / acha laga": "Mujhe bhi 😊 welcome!","welcome / wlcm / welcm": "Thank you 😊",
+"welcome bro / wlcm bro / welcome bhai": "Thank you bhai 😄",
+"welcome back / wlcm back / welcome again": "Thanks 😊 good to be back!",
+"aapka swagat hai / swagat hai / swagat h": "Dhanyavaad 😊",
+"welcome dear / wlcm dear / welcome dost": "Thank you 😊",
+"welcome buddy / wlcm buddy / welcome dost": "Thanks buddy 😄",
+"welcome sir / wlcm sir / welcome ji": "Thank you sir 😊",
+"welcome boss / wlcm boss / welcome bhaiya": "Thanks boss 😎",
+"most welcome / mst welcome / most wlcm": "Thank you 😊",
+"you are welcome / u r welcome / ur welcome": "Thanks 😊",
+"welcome ji / wlcm ji / welcome g": "Dhanyavaad 😊",
+"welcome friend / wlcm frnd / welcome yaar": "Thanks yaar 😄",
+"welcome again / wlcm agn / welcome once more": "Thanks again 😊",
+"welcome here / wlcm here / welcome yaha": "Thanks 😊",
+"welcome to chat / wlcm to chat / chat welcome": "Glad to be here 😊",
+"welcome home / wlcm home / home welcome": "Thanks 😊 feels good!",
+"welcome everyone / wlcm all / welcome sabko": "Thank you all 😊",
+"welcome bhai / wlcm bhai / bhai welcome": "Thanks bhai 😄",
+"welcome dost / wlcm dost / dost welcome": "Thanks dost 😊",
+"welcome yaar / wlcm yaar / yaar welcome": "Thanks yaar 😄",
+"warm welcome / warm wlcm / warm welcm": "Thank you 😊",
+"grand welcome / grand wlcm / big welcome": "Thanks 😊",
+"special welcome / spcl wlcm / special welcm": "Thank you 😊",
+"welcome dear friend / wlcm dear frnd / welcome dost": "Thanks 😊",
+"welcome my friend / wlcm my frnd / my friend welcome": "Thanks buddy 😄",
+"welcome sir ji / wlcm sir ji / sir ji welcome": "Dhanyavaad sir 😊",
+"welcome boss ji / wlcm boss ji / boss ji welcome": "Thanks boss 😎",
+"welcome bro again / wlcm bro agn / bro welcome": "Thanks bro 😄",
+"welcome back bro / wlcm back bro / back bro welcome": "Thanks bro 😊",
+"welcome back dear / wlcm back dear / back dear welcome": "Thanks 😊 good to be back!",
+"welcome back sir / wlcm back sir / back sir welcome": "Thank you sir 😊",
+"welcome back ji / wlcm back ji / back ji welcome": "Dhanyavaad 😊",
+"welcome to team / wlcm team / team welcome": "Glad to join 😊",
+"welcome to group / wlcm group / group welcome": "Happy to be here 😊",
+"welcome to family / wlcm family / family welcome": "Feels good 😊",
+"welcome to world / wlcm world / world welcome": "Thank you 😊",
+"welcome new member / wlcm new member / new member welcome": "Thanks 😊",
+"welcome guest / wlcm guest / guest welcome": "Thank you 😊",
+"welcome partner / wlcm partner / partner welcome": "Thanks 😊",
+"welcome legend / wlcm legend / legend welcome": "Haha thanks 😄",
+"welcome champ / wlcm champ / champ welcome": "Thanks champ 😎",
+"welcome hero / wlcm hero / hero welcome": "Thanks 😄",
+"welcome king / wlcm king / king welcome": "Haha thanks 😎",
+"welcome queen / wlcm queen / queen welcome": "Thanks 😊",
+"welcome superstar / wlcm superstar / superstar welcome": "Thanks 😄",
+"welcome bhaiya / wlcm bhaiya / bhaiya welcome": "Dhanyavaad 😊",
+"welcome didi / wlcm didi / didi welcome": "Dhanyavaad 😊",
+"welcome dost log / wlcm dost log / sabka welcome": "Thank you 😊","bad day / bd day / bad dy": "Hope tomorrow is better.",
+"aaj din kharab tha / din kharab h / bad day tha": "Kal better hoga.",
+"bad mood / bd mood / bad mod": "Take a break and relax.",
+"mood kharab hai / mood kharab h / mood off": "Thoda rest lo.",
+"bad feeling / bd feeling / bad feel": "It will pass.",
+"bura lag raha hai / bura lg rha h / bad feel": "Ye feeling chali jayegi.",
+"bad luck / bd luck / bad lk": "Better luck next time.",
+"kismat kharab hai / kismat kharab h / bad luck": "Next time better hoga.",
+"bad result / bd result / bad rslt": "Try again.",
+"result kharab aaya / result kharab h / bad result": "Dobara try karo.",
+"bad experience / bd exp / bad experiance": "Learn from it.",
+"bura experience tha / experience bura tha / bad exp": "Isse seekho.",
+"bad situation / bd situation / bad situatn": "Stay strong.",
+"situation kharab hai / situation kharab h / bad situation": "Strong raho.",
+"bad behavior / bd behavior / bad behav": "Stay calm.",
+"behavior kharab hai / behavior kharab h / bad behavior": "Calm raho.",
+"bad people / bd people / bad ppl": "Avoid negative people.",
+"log bure hai / log bure h / bad log": "Negative logon se door raho.",
+"bad habit / bd habit / bad habbit": "Try to improve.",
+"buri aadat hai / aadat buri h / bad habit": "Sudharne ki koshish karo.",
+"bad thinking / bd thinking / bad think": "Think positive.",
+"soch buri hai / soch buri h / bad thinking": "Positive socho.",
+"bad idea / bd idea / bad ideaa": "Try a better plan.",
+"idea bura hai / idea bura h / bad idea": "Better plan banao.",
+"bad choice / bd choice / bad choise": "Choose wisely next time.",
+"choice galat thi / choice galat h / bad choice": "Next time soch ke choose karo.",
+"bad decision / bd decision / bad decisn": "Learn and move on.",
+"decision galat tha / decision galat h / bad decision": "Seekho aur aage badho.",
+"bad performance / bd performance / bad perf": "Practice more.",
+"performance kharab thi / performance kharab h / bad performance": "Practice karo.",
+"bad score / bd score / bad scor": "Work harder.",
+"score kam aaya / score kharab h / bad score": "Aur mehnat karo.",
+"bad marks / bd marks / bad mrks": "Next time improve.",
+"marks kam aaye / marks kharab h / bad marks": "Next time better karo.",
+"bad exam / bd exam / bad exm": "Prepare better.",
+"exam kharab gaya / exam kharab h / bad exam": "Better preparation karo.",
+"bad interview / bd interview / bad intrvw": "Keep trying.",
+"interview kharab gaya / interview kharab h / bad interview": "Try again.",
+"bad job / bd job / bad jb": "Look for better options.",
+"job kharab hai / job kharab h / bad job": "Better option dhundo.",
+"bad boss / bd boss / bad bos": "Handle calmly.",
+"boss kharab hai / boss kharab h / bad boss": "Shaanti se handle karo.",
+"bad company / bd company / bad cmpny": "Change environment.",
+"company kharab hai / company kharab h / bad company": "Environment badlo.",
+"bad friend / bd friend / bad frnd": "Choose good friends.",
+"dost kharab hai / dost kharab h / bad friend": "Ache dost chuno.",
+"bad relationship / bd relation / bad rel": "Think carefully.",
+"relationship kharab hai / relation kharab h / bad relationship": "Soch samajh ke decision lo.",
+"bad breakup / bd breakup / bad brkup": "Time will heal.",
+"breakup bura tha / breakup bura h / bad breakup": "Time heal karega.",
+"bad love / bd love / bad luv": "Learn and move on.",
+"pyaar bura tha / pyar bura h / bad love": "Seekho aur aage badho.",
+"bad memory / bd memory / bad mem": "Let it go.",
+"buri yaadein hai / yaade buri h / bad memory": "Chhod do.",
+"bad thoughts / bd thoughts / bad thots": "Stay positive.",
+"bure thoughts aa rahe / thoughts bure h / bad thoughts": "Positive raho.",
+"bad feeling inside / bd inside / bad inside": "Relax yourself.",
+"andar se bura lag raha / andar bura h / bad inside": "Relax karo.",
+"bad health / bd health / bad helth": "Take care of yourself.",
+"health kharab hai / health kharab h / bad health": "Apna khayal rakho.",
+"bad sleep / bd sleep / bad slp": "Fix your routine.",
+"neend kharab hai / neend kharab h / bad sleep": "Routine thik karo.",
+"bad habit bro / bd habit bro / bad habbit bro": "Try to change bro.",
+"aadat buri hai bhai / aadat kharab h / bad habit": "Sudharne ki koshish karo bhai.",
+"bad vibes / bd vibes / bad vibez": "Stay away from negativity.",
+"vibes kharab hai / vibes kharab h / bad vibes": "Negative se door raho.",
+"bad energy / bd energy / bad engry": "Protect your energy.",
+"energy kharab lag rahi / energy low h / bad energy": "Energy bachao.",
+"bad luck today / bd luck today / bad lk today": "Tomorrow will be better.",
+"aaj kismat kharab hai / aaj luck kharab h / bad luck": "Kal better hoga.",
+"bad situation bro / bd situation bro / bad situatn": "Stay strong bro.",
+"situation kharab hai bhai / situation kharab h / bad situation": "Strong raho bhai.",
+"bad time / bd time / bad tym": "This will pass.",
+"bura time chal raha hai / time kharab h / bad time": "Ye time nikal jayega.",
+"bad phase / bd phase / bad phse": "Stay patient.",
+"bura phase hai / phase kharab h / bad phase": "Sabr rakho.",
+"bad life / bd life / bad lyf": "Make it better.",
+"zindagi buri lag rahi / life kharab h / bad life": "Isse better banao.",
+"bad mood bro / bd mood bro / bad mod bro": "Chill bro.",
+"mood off hai bhai / mood off h / bad mood": "Relax karo bhai.",
+"bad feeling bro / bd feeling bro / bad feel bro": "Stay strong bro.",
+"bura lag raha bhai / bura lg rha h / bad feel": "Strong raho bhai.","acha hai / acha h / acha": "Great 😊",
+"good hai / good h / gud hai": "Nice 😊",
+"bahut acha / bohot acha / bahut achha": "Awesome 😊",
+"very good / vry good / very gud": "Excellent 👍",
+"nice hai / nice h / nise hai": "Nice 😊",
+"mast hai / mast h / mast": "Badiya 😄",
+"badhiya hai / bdiya hai / badhiya h": "Zabardast 😄",
+"awesome hai / awsm hai / awesome h": "Amazing 😍",
+"perfect hai / perfect h / perfct hai": "Perfect 👍",
+"ekdum sahi / ekdum shi / ekdum sahi hai": "Bilkul 👍",
+"sahi hai / shi hai / sahi h": "Correct 👍",
+"bilkul sahi / bilkul shi / bilkul sahi hai": "Exactly 👍",
+"kaafi acha / kafi acha / kafi achha": "Good 😊",
+"kaafi badhiya / kafi badhiya / badhiya": "Nice 😄",
+"bohot badhiya / bohot bdiya / bahut badhiya": "Great 😄",
+"kaam acha hai / kaam acha h / good work": "Well done 👍",
+"tum acha kar rahe ho / acha kr rhe ho / good work": "Keep it up 👍",
+"bahut sahi kiya / bahut sahi kia / good job": "Great job 👍",
+"mast kaam / mast kaam hai / mast work": "Awesome 😄",
+"acha idea hai / acha idea h / good idea": "Nice idea 👍",
+"sahi soch / sahi soch hai / good thinking": "Smart 👍",
+"acha plan hai / acha plan h / good plan": "Great plan 👍",
+"sahi decision / sahi decision h / good decision": "Good choice 👍",
+"acha result / acha result h / good result": "Nice result 😊",
+"acha score / acha score h / good score": "Well done 👍",
+"acha marks / acha marks h / good marks": "Keep it up 👍",
+"acha performance / acha perf / good performance": "Great job 👍",
+"acha improvement / acha improve / good improve": "Nice progress 👍",
+"acha progress / acha progress h / good progress": "Keep going 👍",
+"acha feeling / acha feel / good feeling": "Stay happy 😊",
+"acha mood / acha mood h / good mood": "Nice 😊",
+"acha lag raha / acha lg rha h / good feel": "That’s great 😊",
+"acha din hai / acha din h / good day": "Enjoy your day 😊",
+"acha lagta hai / acha lgta h / feels good": "Nice 😊",
+"acha lag gaya / acha lg gya / good feel": "Great 😊",
+"acha hua / acha hua h / good happened": "Good 😊",
+"acha bana hai / acha bna h / well made": "Nice work 👍",
+"acha design / acha dizain / good design": "Looks great 😊",
+"acha output / acha output h / good output": "Nice result 👍",
+"acha response / acha resp / good response": "Glad 😊",
+"acha answer / acha ans / good answer": "Happy 😊",
+"acha suggestion / acha suggest / good suggestion": "Good idea 👍",
+"acha advice / acha advice h / good advice": "Helpful 😊",
+"acha guide / acha guide h / good guide": "Nice 😊",
+"acha explain / acha explain h / good explain": "Clear 👍",
+"acha samjhaya / acha smjhaya / well explained": "Glad 😊",
+"acha samajh aya / acha smjh aya / understood": "Great 👍",
+"acha seekha / acha sikha / good learning": "Nice 😊",
+"acha knowledge / acha knowledge h / good knowledge": "Keep learning 😊",
+"acha talent / acha talent h / good talent": "Impressive 😄",
+"acha skill / acha skill h / good skill": "Nice 👍",
+"acha effort / acha effort h / good effort": "Keep trying 👍",
+"acha try / acha try h / good try": "Nice attempt 👍",
+"acha kaam bro / acha kaam bhai / good work bro": "Great bhai 😄",
+"acha kaam dost / acha kaam yaar / good work friend": "Nice yaar 😄",
+"acha job bro / acha job bhai / good job bro": "Well done bhai 😄",
+"acha job dear / acha job h / good job": "Great 😊",
+"acha luck / acha luck h / good luck": "Best of luck 😊",
+"acha luck bro / good luck bhai / acha luck": "All the best bhai 😄",
+"acha luck dost / good luck yaar / acha luck": "Best wishes 😊",
+"acha vibe / acha vibe h / good vibes": "Stay positive 😊",
+"acha energy / acha energy h / good energy": "Nice 😊",
+"acha feeling bro / acha feel bhai / good feeling": "Stay happy bhai 😄",
+"acha mood bro / acha mood bhai / good mood": "Enjoy bhai 😄",
+"acha din bro / acha din bhai / good day": "Have a nice day 😄",
+"acha din dear / acha din h / good day": "Enjoy 😊",
+"acha night / acha night h / good night": "Good night 😊",
+"acha morning / acha morning h / good morning": "Good morning 😊",
+"acha evening / acha evening h / good evening": "Good evening 😊",
+"acha afternoon / acha aft h / good afternoon": "Good afternoon 😊",
+"acha laga milke / acha laga / nice to meet": "Nice to meet you 😊",
+"acha laga baat karke / acha laga / good talk": "Same here 😊",
+"acha experience / acha exp h / good experience": "Nice 😊",
+"acha moment / acha moment h / good moment": "Enjoy 😊",
+"acha time / acha time h / good time": "Nice 😊",
+"acha din tha / acha din tha / good day": "Great 😊",
+"acha kaam kiya / acha kaam kia / well done": "Well done 👍",
+"acha result aya / acha result aya / good result": "Nice 😊",
+"acha feel hua / acha feel hua / good feel": "Great 😊",
+"acha laga sunke / acha laga / good to hear": "Nice 😊",
+"acha hai bro / acha hai bhai / good bro": "Nice bhai 😄",
+"acha hai dost / acha hai yaar / good friend": "Nice yaar 😄",
+"acha hai dear / acha hai / good dear": "Nice 😊",
+"acha hai ji / acha hai / good ji": "Dhanyavaad 😊","aaj barish hogi? / aaj barish hogi ya nahi / aaj rain hogi": "Aap kis jagah ka weather check karna chahte ho? Barish, dhoop ya hawa?",
+"will it rain today? / rain today / aaj rain": "Which location? Do you want rain, sun, or wind info?",
+"aaj mausam kaisa hoga? / aaj mosam kaisa h / aaj weather": "Kis city ka weather chahiye? Barish, dhoop ya hawa?",
+"today weather? / weather today / aaj ka weather": "Tell me location and type: rain, sun or wind?",
+"aaj dhoop hogi? / aaj dhup hogi / sun today": "Kis jagah ka dhoop check karna hai?",
+"will it be sunny today? / sunny today / sun today": "Which location do you want sun info for?",
+"aaj hawa chalegi? / aaj hawa chalegi kya / wind today": "Kis jagah ki hawa ka update chahiye?",
+"wind today? / will wind blow / windy today": "Location batao for wind info.",
+"barish kab hogi? / rain kab hogi / kab barish": "Kis city me barish ka time check karna hai?",
+"when will it rain? / rain kab / when rain": "Tell location for rain forecast.",
+"kal barish hogi? / kal rain hogi / tomorrow rain": "Kis jagah ka kal ka rain check karna hai?",
+"will it rain tomorrow? / rain tomorrow / tmro rain": "Which location for tomorrow rain?",
+"aaj garmi hogi? / aaj garmi hogi kya / heat today": "Kis jagah ki garmi ka weather chahiye?",
+"is it hot today? / hot today / heat today": "Tell location for temperature info.",
+"thand hogi kya? / aaj thand hogi / cold today": "Kis jagah ki thand check karni hai?",
+"is it cold today? / cold today / thand today": "Which location for cold weather?",
+"aaj mausam thik hai? / mosam thik h / weather ok": "Kis city ka weather check karna hai?",
+"is weather good today? / weather good / good weather": "Tell location and type.",
+"aaj tufaan ayega? / tufan ayega kya / storm today": "Kis jagah ka storm check karna hai?",
+"storm today? / will storm come / tufan today": "Location batao storm info ke liye.",
+"aaj badal hai? / aaj badal honge / cloudy today": "Kis jagah ke badal check karne hai?",
+"is it cloudy today? / cloudy today / clouds today": "Which location?",
+"aaj humidity kitni hai? / humidity aaj / aaj nami": "Kis jagah ki humidity chahiye?",
+"humidity today? / today humidity / nami today": "Tell location for humidity.",
+"aaj hawa tez hai? / hawa tez hogi / strong wind": "Kis jagah ki hawa check karni hai?",
+"strong wind today? / windy strong / hawa strong": "Location batao.",
+"aaj baarish kitni hogi? / kitni rain hogi / rain amount": "Kis jagah ka rainfall detail chahiye?",
+"rain amount today? / how much rain / rain kitni": "Which city?",
+"aaj mausam change hoga? / weather change hoga / mosam change": "Kis location ka update chahiye?",
+"weather change today? / will weather change / change today": "Tell location.",
+"aaj fog hogi? / fog hogi kya / fog today": "Kis jagah ka fog check karna hai?",
+"fog today? / will fog come / fog aaj": "Which location?",
+"aaj visibility kaisi hai? / visibility aaj / dikhega": "Kis jagah ki visibility check karni hai?",
+"visibility today? / how clear / clear today": "Tell location.",
+"aaj sunset kab hoga? / sunset kab / aaj suraj kab dubega": "Kis city ka sunset time chahiye?",
+"sunset today? / when sunset / sunset time": "Which location?",
+"aaj sunrise kab hoga? / sunrise kab / suraj kab niklega": "Kis jagah ka sunrise chahiye?",
+"sunrise today? / when sunrise / sunrise time": "Tell location.",
+"aaj mausam safe hai? / weather safe h / safe weather": "Kis jagah ka weather check karna hai?",
+"is weather safe today? / safe weather / safe today": "Location batao.",
+"aaj travel ke liye weather thik hai? / travel weather / travel ok": "Kis jagah ka travel weather check karna hai?",
+"is it good to travel today? / travel today / travel ok": "Which city?",
+"aaj picnic ke liye weather kaisa hai? / picnic weather / picnic ok": "Kis jagah ka weather chahiye?",
+"picnic weather today? / good for picnic / picnic today": "Tell location.",
+"aaj match hoga ya cancel? / match cancel hoga / rain match": "Kis jagah ka weather chahiye?",
+"will match be cancelled? / match weather / rain match": "Which location?",
+"aaj bike ride ke liye weather kaisa hai? / ride weather / ride ok": "Kis jagah ka weather chahiye?",
+"bike ride weather today? / ride today / ride weather": "Tell location.",
+"aaj kapde sukh jayenge? / kapde sukh jayenge kya / dry today": "Kis jagah ki dhoop check karni hai?",
+"will clothes dry today? / dry today / sun dry": "Which location?",
+"aaj umbrella le jana chahiye? / umbrella le jau / umbrella today": "Kis jagah ka rain check karna hai?",
+"should I take umbrella? / umbrella today / rain chance": "Tell location.",
+"aaj AC chalana padega? / ac chalega kya / heat today": "Kis jagah ka temperature chahiye?",
+"need AC today? / hot today / ac today": "Which location?",
+"aaj heater chahiye? / heater chahiye kya / cold today": "Kis jagah ki thand check karni hai?",
+"need heater today? / cold today / heater today": "Tell location.","aaj rain chance hai? / rain chance aaj / aaj rain chance": "Kis jagah ka rain chance check karna hai?",
+"is there chance of rain today? / rain chance today / chance rain": "Which location for rain chance?",
+"aaj baarish ke chances kya hai? / barish chance kya h / rain chance": "Kis city ka forecast chahiye?",
+"rain probability today? / probability rain / rain prob": "Tell location for rain probability.",
+"aaj kitni garmi hai? / kitni garmi aaj / heat kitni": "Kis jagah ka temperature chahiye?",
+"how hot is it today? / hot today how much / heat today": "Which location for temperature?",
+"aaj temperature kitna hai? / temp kitna h / temperature aaj": "Kis city ka temperature chahiye?",
+"temperature today? / today temp / temp today": "Tell location for temperature.",
+"aaj feel like temperature kya hai? / feel like temp / real feel": "Kis jagah ka real feel check karna hai?",
+"real feel today? / feels like temp / feel temp": "Which location?",
+"aaj hawa ki speed kya hai? / hawa speed kya h / wind speed": "Kis jagah ki wind speed chahiye?",
+"wind speed today? / speed wind / wind today": "Tell location.",
+"aaj air quality kaisi hai? / air quality aaj / AQI today": "Kis jagah ka AQI check karna hai?",
+"air quality today? / AQI today / pollution today": "Which location?",
+"aaj pollution kitna hai? / pollution kitna h / AQI kitna": "Kis city ka pollution level chahiye?",
+"pollution level today? / pollution today / AQI level": "Tell location.",
+"aaj mausam kharab hai kya? / weather kharab h / bad weather": "Kis jagah ka weather check karna hai?",
+"is weather bad today? / bad weather today / weather bad": "Which location?",
+"aaj mausam clear hai? / weather clear h / clear sky": "Kis jagah ka clear sky check karna hai?",
+"is sky clear today? / clear weather / clear sky": "Tell location.",
+"aaj barish kab start hogi? / rain start kab / barish kab": "Kis jagah ka rain timing chahiye?",
+"when will rain start? / rain start time / start rain": "Which city?",
+"aaj barish kab rukegi? / rain kab rukegi / rain stop": "Kis jagah ka rain stop time chahiye?",
+"when will rain stop? / stop rain / rain end": "Tell location.",
+"aaj pura din barish hogi? / full day rain / barish pura din": "Kis jagah ka forecast chahiye?",
+"will it rain all day? / rain all day / full rain": "Which location?",
+"aaj thandi hawa chalegi? / thandi hawa aaj / cool wind": "Kis jagah ki hawa check karni hai?",
+"cool wind today? / cool breeze / wind cool": "Tell location.",
+"aaj garmi zyada hai? / garmi zyada h / high heat": "Kis jagah ka temperature chahiye?",
+"is it very hot today? / too hot today / high temp": "Which location?",
+"aaj thand zyada hai? / thand zyada h / too cold": "Kis jagah ki thand check karni hai?",
+"is it too cold today? / very cold today / cold high": "Tell location.",
+"aaj baarish ke baad dhoop niklegi? / rain ke baad sun / sun after rain": "Kis jagah ka weather pattern chahiye?",
+"sun after rain today? / rain then sun / after rain sun": "Which location?",
+"aaj mausam stable hai? / weather stable h / stable weather": "Kis city ka weather chahiye?",
+"is weather stable today? / stable today / weather stable": "Tell location.",
+"aaj humidity high hai? / humidity high h / nami zyada": "Kis jagah ki humidity chahiye?",
+"is humidity high today? / high humidity / humidity today": "Which location?",
+"aaj humidity low hai? / humidity low h / nami kam": "Kis jagah ki humidity chahiye?",
+"is humidity low today? / low humidity / humidity low": "Tell location.",
+"aaj hawa thandi hai? / hawa thandi h / cool air": "Kis jagah ki hawa check karni hai?",
+"is wind cool today? / cool wind / air cool": "Which location?",
+"aaj hawa garam hai? / hawa garam h / hot wind": "Kis jagah ki hawa chahiye?",
+"is wind hot today? / hot air / wind hot": "Tell location.",
+"aaj barish tez hogi? / heavy rain aaj / tez barish": "Kis jagah ka rain intensity check karna hai?",
+"heavy rain today? / strong rain / heavy rain": "Which location?",
+"aaj halki barish hogi? / light rain aaj / halki barish": "Kis jagah ka rain check karna hai?",
+"light rain today? / drizzle today / light rain": "Tell location.",
+"aaj hawa tez chalegi? / hawa tez aaj / strong wind": "Kis jagah ki wind speed chahiye?",
+"strong wind today? / windy today / wind strong": "Which location?",
+"aaj hawa slow hai? / hawa slow h / light wind": "Kis jagah ki hawa check karni hai?",
+"light wind today? / slow wind / wind light": "Tell location.",
+"aaj mausam change kab hoga? / weather change kab / change time": "Kis jagah ka update chahiye?",
+"when will weather change? / weather change time / change weather": "Which location?",
+"aaj raat ko barish hogi? / night rain / raat barish": "Kis jagah ka night weather chahiye?",
+"will it rain at night? / night rain today / rain night": "Tell location.",
+"aaj subah barish hui thi? / morning rain / subah rain": "Kis jagah ka morning weather chahiye?",
+"did it rain in morning? / morning rain today / rain morning": "Which location?",
+"aaj shaam ko dhoop hogi? / evening sun / shaam dhoop": "Kis jagah ka evening weather chahiye?",
+"sun in evening? / evening sun today / sun evening": "Tell location.",
+"aaj raat thand hogi? / night cold / raat thand": "Kis jagah ka night temperature chahiye?",
+"cold at night? / night cold today / cold night": "Which location?",
+"aaj din me garmi hogi? / day heat / din garmi": "Kis jagah ka day temperature chahiye?",
+"hot in day? / day hot today / heat day": "Tell location.","aaj bahar jana safe hai? / bahar jana safe h / go outside today": "Kis jagah ka weather check karna hai? Barish, dhoop ya hawa?",
+"is it safe to go outside today? / go outside safe / outside today": "Which location? Rain, sun or wind info?",
+"aaj office jane ka weather kaisa hai? / office weather / office jana": "Kis city ka weather chahiye?",
+"is weather good for office today? / office weather today / go office": "Tell location.",
+"aaj school jane ke liye weather kaisa hai? / school weather / school jana": "Kis jagah ka weather chahiye?",
+"is weather ok for school today? / school today weather / go school": "Which location?",
+"aaj driving ke liye weather thik hai? / driving weather / drive ok": "Kis jagah ka weather check karna hai?",
+"is it safe to drive today? / driving safe today / drive weather": "Tell location.",
+"aaj road slippery hogi? / road slippery / barish road": "Kis jagah ka rain check karna hai?",
+"will roads be slippery today? / slippery roads / rain roads": "Which location?",
+"aaj traffic weather se affect hoga? / traffic weather / traffic rain": "Kis jagah ka weather chahiye?",
+"will weather affect traffic today? / traffic weather today / rain traffic": "Tell location.",
+"aaj flight delay hogi weather ki wajah se? / flight delay weather / delay rain": "Kis jagah ka weather chahiye?",
+"will flights be delayed today? / flight delay weather / delay flight": "Which city?",
+"aaj train delay hogi kya? / train delay weather / delay train": "Kis jagah ka weather chahiye?",
+"will train be delayed today? / train delay today / delay train": "Tell location.",
+"aaj outdoor event possible hai? / outdoor event weather / event today": "Kis jagah ka weather check karna hai?",
+"is outdoor event possible today? / event weather / outdoor today": "Which location?",
+"aaj shaadi ke liye weather thik hai? / shaadi weather / wedding weather": "Kis jagah ka weather chahiye?",
+"is weather good for wedding today? / wedding weather today / shaadi weather": "Tell location.",
+"aaj picnic cancel karni chahiye? / picnic cancel / picnic rain": "Kis jagah ka weather check karna hai?",
+"should we cancel picnic today? / picnic today weather / cancel picnic": "Which location?",
+"aaj beach jane ke liye weather kaisa hai? / beach weather / beach today": "Kis jagah ka weather chahiye?",
+"is weather good for beach today? / beach today weather / beach ok": "Tell location.",
+"aaj park jana sahi rahega? / park weather / park jana": "Kis jagah ka weather check karna hai?",
+"is it good to go park today? / park today weather / park ok": "Which location?",
+"aaj gym ke bajay bahar workout kare? / outdoor workout / workout weather": "Kis jagah ka weather chahiye?",
+"outdoor workout today? / workout outside / outside workout": "Tell location.",
+"aaj cricket khel sakte hai? / cricket weather / match khelna": "Kis jagah ka weather chahiye?",
+"can we play cricket today? / cricket today weather / play cricket": "Which location?",
+"aaj football match hoga? / football weather / match today": "Kis jagah ka weather check karna hai?",
+"will football match happen today? / match weather / football today": "Tell location.",
+"aaj running ke liye weather thik hai? / running weather / run today": "Kis jagah ka weather chahiye?",
+"is weather good for running? / run today weather / running today": "Which location?",
+"aaj cycling ke liye weather kaisa hai? / cycling weather / cycle today": "Kis jagah ka weather chahiye?",
+"is weather ok for cycling today? / cycle weather today / cycling today": "Tell location.",
+"aaj barish ke wajah se power cut ho sakta hai? / power cut rain / light jayegi": "Kis jagah ka weather check karna hai?",
+"can rain cause power cut today? / power cut weather / electricity rain": "Which location?",
+"aaj flood ka risk hai? / flood risk / flood today": "Kis jagah ka weather chahiye?",
+"is there flood risk today? / flood warning / flood weather": "Tell location.",
+"aaj storm warning hai kya? / storm warning / tufan alert": "Kis jagah ka weather check karna hai?",
+"is there storm warning today? / storm alert / warning storm": "Which location?",
+"aaj heatwave hai kya? / heatwave aaj / garmi alert": "Kis jagah ka temperature chahiye?",
+"is there heatwave today? / heat alert / hot warning": "Tell location.",
+"aaj cold wave hai kya? / coldwave aaj / thand alert": "Kis jagah ka weather chahiye?",
+"is there cold wave today? / cold alert / cold warning": "Which location?",
+"aaj UV index kitna hai? / UV index aaj / sun index": "Kis jagah ka UV index chahiye?",
+"UV index today? / sun index today / UV today": "Tell location.",
+"aaj sunscreen lagana chahiye? / sunscreen today / sun protection": "Kis jagah ka sun level chahiye?",
+"should I use sunscreen today? / sunscreen needed / sun strong": "Which location?",
+"aaj jacket pehnu ya nahi? / jacket pehnu / cold wear": "Kis jagah ka temperature chahiye?",
+"should I wear jacket today? / jacket today / wear jacket": "Tell location.",
+"aaj raincoat le jau? / raincoat le jau / raincoat today": "Kis jagah ka rain check karna hai?",
+"should I take raincoat today? / raincoat needed / rain today": "Which location?",
+"aaj sunglasses pehnu? / sunglasses pehnu / sun wear": "Kis jagah ka sun check karna hai?",
+"should I wear sunglasses today? / sunglasses today / sun strong": "Tell location.",
+"aaj mask pehnu pollution ki wajah se? / mask pollution / AQI mask": "Kis jagah ka AQI chahiye?",
+"should I wear mask today? / pollution mask / AQI today": "Which location?",
+"aaj pani zyada peena chahiye garmi ki wajah se? / pani zyada / heat hydration": "Kis jagah ka temperature chahiye?",
+"should I drink more water today? / hydration heat / hot day": "Tell location.",
+"aaj AC ya fan chalega? / AC ya fan / cooling today": "Kis jagah ka temperature chahiye?",
+"AC or fan today? / cooling needed / hot today": "Which location?",
+"aaj heater ya blanket chahiye? / heater blanket / cold today": "Kis jagah ki thand check karni hai?",
+"heater or blanket today? / cold today / need heater": "Tell location.",
+"aaj kapde kaise pehne? / kapde kaise / dress weather": "Kis jagah ka weather chahiye?",
+"what to wear today? / dress for weather / wear today": "Which location?",
+"aaj travel plan change karna chahiye? / travel change / plan weather": "Kis jagah ka weather check karna hai?",
+"should I change travel plan today? / travel weather / plan change": "Tell location.",
+"aaj flight safe hai weather ke hisab se? / flight safe weather / fly safe": "Kis jagah ka weather chahiye?",
+"is it safe to fly today? / flight safety weather / fly today": "Which location?",
+"aaj long drive safe hai? / long drive weather / drive safe": "Kis jagah ka weather chahiye?",
+"is long drive safe today? / drive weather / long drive": "Tell location.",
+"aaj boating safe hai? / boating weather / boat today": "Kis jagah ka weather chahiye?",
+"is boating safe today? / boat weather / boating today": "Which location?",
+"aaj trekking safe hai? / trekking weather / trek today": "Kis jagah ka weather check karna hai?",
+"is trekking safe today? / trek weather / trekking today": "Tell location.",
+"aaj camping ke liye weather kaisa hai? / camping weather / camp today": "Kis jagah ka weather chahiye?",
+"is camping good today? / camp weather / camping today": "Which location?",
+"aaj hill station ka weather kaisa hai? / hill weather / hill station": "Kis jagah ka weather chahiye?",
+"weather at hill station today? / hill weather today / hill temp": "Tell location.","iran war kya hai? / iran war kya h / iran war kya": "Ye ek ongoing war hai USA, Israel aur Iran ke beech.",
+"what is iran war? / iran war kya / iran war": "It is an ongoing conflict between US, Israel and Iran.",
+"iran war kab start hua? / iran war kab start / war kab hua": "Ye war Feb 2026 me start hua.",
+"when did iran war start? / iran war start kab / war start": "It started in Feb 2026.",
+"iran war chal raha hai kya? / iran war chal rha h / war chal raha": "Haan, abhi bhi war chal raha hai.",
+"is iran war still going? / war still on / iran war now": "Yes, the war is still ongoing.",
+"iran war me kaun fight kar raha hai? / kaun fight kr rha / war me kaun": "USA aur Israel vs Iran fight kar rahe hai.",
+"who is fighting in iran war? / war me kaun / who fighting": "US and Israel vs Iran.",
+"iran war kyu hua? / war kyu hua / iran war reason": "Nuclear aur political tension ki wajah se.",
+"why iran war started? / war reason / iran war why": "Due to nuclear and geopolitical tensions.",
+"iran war dangerous hai kya? / war dangerous h / danger war": "Haan, ye kaafi dangerous conflict hai.",
+"is iran war dangerous? / war dangerous / danger war": "Yes, it is very dangerous.",
+"iran war me kitne log mare? / kitne log mare / death war": "Hazaron log mar chuke hai.",
+"how many died in iran war? / death count war / war death": "Thousands of people have died.",
+"iran war kab khatam hoga? / war kab khatam / end war": "Abhi clear nahi hai.",
+"when will iran war end? / war end kab / end iran war": "No clear end yet.",
+"iran war me india safe hai? / india safe h / india danger": "India direct war me nahi hai.",
+"is india safe in iran war? / india safe / india war": "India is not directly involved.",
+"iran war se petrol mehnga hoga? / petrol mehnga hoga / oil price": "Haan, oil prices badh rahe hai.",
+"will petrol price increase? / oil price war / petrol war": "Yes, prices are increasing.",
+"iran war world war banega kya? / world war banega / ww3": "Abhi confirm nahi hai.",
+"will iran war become world war? / ww3 chance / world war": "Not confirmed yet.",
+"iran war news kya hai? / war news kya h / latest war": "War abhi bhi chal raha hai aur tension high hai.",
+"latest iran war update? / war update / update iran": "Conflict is ongoing with high tension.",
+"iran war me missiles use ho rahe? / missile use / war missile": "Haan, missiles aur drones use ho rahe hai.",
+"are missiles used in iran war? / missile war / war weapons": "Yes, missiles and drones are used.",
+"iran war me air attack ho raha? / air attack war / attack iran": "Haan, airstrikes ho rahe hai.",
+"is there airstrike in iran war? / air attack / strike iran": "Yes, airstrikes are happening.",
+"iran war me economy affect ho rahi? / economy affect / war economy": "Haan, global economy affect ho rahi hai.",
+"is economy affected by iran war? / war economy / impact economy": "Yes, global economy is affected.",
+"iran war me travel safe hai? / travel safe war / travel danger": "Travel risky ho sakta hai.",
+"is travel safe during iran war? / travel war / safe travel": "It can be risky.",
+"iran war me flights cancel ho rahi? / flights cancel / war flight": "Haan, kai flights cancel hui hai.",
+"are flights cancelled due to iran war? / flight war / cancel flight": "Yes, many flights are affected.",
+"iran war me internet band hua? / net band / war internet": "Kuch jagah internet restrict hua tha.",
+"is internet shut down in iran war? / internet war / net off": "Yes, in some areas.",
+"iran war me next kya hoga? / next kya hoga / future war": "Situation unpredictable hai.",
+"what will happen next in iran war? / next war / future war": "It is unpredictable.",
+"iran war kab tak chalega? / war kab tak / war duration": "Koi fixed time nahi hai.",
+"how long iran war last? / war duration / kitna time": "No fixed timeline.",
+"iran war se duniya par kya effect? / world effect / war impact": "Oil, economy aur travel sab affect ho rahe hai.",
+"impact of iran war? / war impact / global effect": "Oil, economy and travel affected.",
+"iran war me nuclear risk hai? / nuclear risk / war nuclear": "Risk exist karta hai.",
+"is there nuclear risk in iran war? / nuclear war / risk nuclear": "Yes, risk exists."
 ,
-  "acha hai sab / acha hai sab kuch / good all": "Great 😊",
-  "acha chal raha / acha chal rha h / going good": "Keep going 👍",
-  "acha progress bro / acha progress bhai / good progress": "Nice bhai 😄",
-  "acha improvement bro / acha improve bhai / good improve": "Keep it up 😄",
-  "acha result bro / acha result bhai / good result": "Great bhai 😄",
-  "welcome sabhi ko / wlcm sabhi / sab welcome": "Dhanyavaad 😊",
-  "welcome everyone here / wlcm everyone / everyone welcome": "Thanks all 😊",
-  "welcome guys / wlcm guys / guys welcome": "Thanks guys 😄",
-  "welcome people / wlcm ppl / ppl welcome": "Thanks 😊",
-  "welcome team mate / wlcm teammate / team mate welcome": "Thanks 😊",
-  "welcome junior / wlcm junior / junior welcome": "Thanks 😊",
-  "welcome senior / wlcm senior / senior welcome": "Thank you 😊",
-  "welcome bhai log / wlcm bhai log / bhai log welcome": "Thanks bhai log 😄",
-  "welcome sab log / wlcm sab log / sab log welcome": "Dhanyavaad 😊",
-  "welcome everyone again / wlcm agn all / welcome all": "Thanks again 😊",
-  "welcome once again / wlcm once agn / once welcome": "Thank you 😊",
-  "welcome all friends / wlcm all frnds / all friends welcome": "Thanks 😊",
-  "welcome everyone back / wlcm back all / back welcome": "Good to be back 😊",
-  "welcome you / wlcm u / you welcome": "Thanks 😊",
-  "welcome to you / wlcm to u / u welcome": "Thank you 😊",
-  "welcome dear user / wlcm dear user / user welcome": "Thanks 😊",
-  "welcome respected sir / wlcm respected sir / sir welcome": "Thank you sir 😊",
-  "welcome madam / wlcm madam / madam welcome": "Thank you 😊",
-  "welcome ma'am / wlcm mam / mam welcome": "Thank you 😊",
-  "welcome bro ji / wlcm bro ji / bro ji welcome": "Thanks bro 😊",
-  "welcome sis / wlcm sis / sis welcome": "Thanks 😊",
-  "welcome behen / wlcm behen / behen welcome": "Dhanyavaad 😊",
-  "welcome bhai saab / wlcm bhai saab / bhai saab welcome": "Dhanyavaad 😊",
-  "welcome sir ji again / wlcm sir ji agn / sir ji welcome": "Thank you sir 😊",
-  "welcome to this chat / wlcm this chat / chat me welcome": "Glad to be here 😊",
-  "welcome here again / wlcm here agn / here welcome": "Thanks 😊",
-  "welcome in chat / wlcm in chat / chat welcome": "Thanks 😊",
-  "welcome to conversation / wlcm conversation / convo welcome": "Nice to join 😊",
-  "welcome again bro / wlcm agn bro / bro welcome": "Thanks bro 😄",
-  "welcome again friend / wlcm agn frnd / friend welcome": "Thanks 😊",
-  "welcome again ji / wlcm agn ji / ji welcome": "Dhanyavaad 😊",
-  "welcome again yaar / wlcm agn yaar / yaar welcome": "Thanks yaar 😄",
-  "welcome again boss / wlcm agn boss / boss welcome": "Thanks boss 😎",
-  "welcome back everyone / wlcm back all / back everyone": "Good to be back 😊",
-  "welcome back guys / wlcm back guys / guys welcome": "Thanks guys 😄",
-  "welcome back friends / wlcm back frnds / friends welcome": "Thanks 😊",
-  "welcome back team / wlcm back team / team welcome": "Glad 😊",
-  "welcome back buddy / wlcm back buddy / buddy welcome": "Thanks buddy 😄","good morning / gud morning / gd mrng": "Good morning 😊",
-  "good morning bro / gud mrng bro / gm bro": "Good morning bhai 😄",
-  "good morning dear / gud mrng dear / gm dear": "Good morning 😊",
-  "good morning ji / gud mrng ji / gm ji": "Namaste 😊 good morning",
-  "good morning everyone / gm everyone / gud mrng all": "Good morning sabko 😊",
-  "good afternoon / gud afternun / gd afternoon": "Good afternoon 😊",
-  "good afternoon bro / gd afternoon bro / gud aft bro": "Good afternoon bhai 😄",
-  "good afternoon dear / gd aft dear / gud afternoon": "Good afternoon 😊",
-  "good evening / gud evng / gd evening": "Good evening 😊",
-  "good evening bro / gd evng bro / gud eve bro": "Good evening bhai 😄",
-  "good evening dear / gd evng dear / gud evening": "Good evening 😊",
-  "good night / gud night / gd nyt": "Good night 😊",
-  "good night bro / gd nyt bro / gud nite bro": "Good night bhai 😄",
-  "good night dear / gd nyt dear / gud nite dear": "Good night 😊",
-  "good job / gud job / gd job": "Great job 👍",
-  "good work / gud work / gd work": "Nice work 👍",
-  "good going / gud going / gd going": "Keep it up 👍",
-  "good luck / gud luck / gd luck": "Best of luck 😊",
-  "good luck bro / gd luck bro / gud luck bhai": "All the best bhai 😄",
-  "good luck dear / gd luck dear / gud luck dear": "Best of luck 😊",
-  "good idea / gud idea / gd idea": "Nice idea 👍",
-  "good thinking / gud thinking / gd think": "Smart thinking 👍",
-  "good answer / gud ans / gd answer": "Glad you liked it 😊",
-  "good question / gud ques / gd question": "Nice question 👍",
-  "good point / gud point / gd point": "Valid point 👍",
-  "good choice / gud choice / gd choice": "Great choice 👍",
-  "good decision / gud decision / gd decision": "Smart decision 👍",
-  "good plan / gud plan / gd plan": "Nice plan 👍",
-  "good move / gud move / gd move": "Great move 👍",
-  "good effort / gud effort / gd effort": "Keep trying 👍",
-  "good try / gud try / gd try": "Nice try 👍",
-  "good attempt / gud attempt / gd attempt": "Good effort 👍",
-  "good result / gud result / gd result": "Great result 😊",
-  "good performance / gud perf / gd performance": "Well done 👍",
-  "good progress / gud progress / gd progress": "Keep improving 👍",
-  "good news / gud news / gd news": "That’s great 😊",
-  "good vibes / gud vibes / gd vibes": "Positive energy 😊",
-  "good feeling / gud feeling / gd feeling": "Nice 😊",
-  "good mood / gud mood / gd mood": "Stay happy 😊",
-  "good day / gud day / gd day": "Have a nice day 😊",
-  "good day bro / gd day bro / gud day bhai": "Nice day bhai 😄",
-  "good day dear / gd day dear / gud day dear": "Have a great day 😊",
-  "good start / gud start / gd start": "Nice beginning 👍",
-  "good finish / gud finish / gd finish": "Well completed 👍",
-  "good support / gud support / gd support": "Happy to help 😊",
-  "good help / gud help / gd help": "Glad it helped 😊",
-  "good service / gud service / gd service": "Thanks 😊",
-  "good response / gud response / gd response": "Glad you liked it 😊",
-  "good reply / gud reply / gd reply": "Thank you 😊",
-  "good suggestion / gud suggest / gd suggestion": "Happy to suggest 😊",
-  "good advice / gud advice / gd advice": "Hope it helps 😊",
-  "good guidance / gud guide / gd guidance": "Glad to guide 😊",
-  "good explanation / gud explain / gd explain": "Happy to explain 😊",
-  "good clarity / gud clarity / gd clarity": "Nice 😊",
-  "good understanding / gud understand / gd understand": "Great 😊",
-  "good improvement / gud improve / gd improve": "Keep it up 👍",
-  "good learning / gud learning / gd learning": "Nice progress 😊",
-  "good knowledge / gud knowledge / gd knowledge": "Keep learning 😊",
-  "good thinking bro / gud thinking bro / gd think bhai": "Smart bro 😄",
-  "good thinking dear / gud thinking dear / gd think dear": "Nice 😊",
-  "good work bro / gud work bro / gd work bhai": "Great bhai 😄",
-  "good work dear / gud work dear / gd work dear": "Nice 😊",
-  "good job bro / gud job bro / gd job bhai": "Well done bhai 😄",
-  "good job dear / gud job dear / gd job dear": "Great 😊",
-  "good luck bhai / gud luck bhai / gd luck bhai": "Best of luck 😄",
-  "good luck dost / gud luck dost / gd luck dost": "All the best 😊",
-  "good luck yaar / gud luck yaar / gd luck yaar": "Best wishes 😄",
-  "good luck exam / gud luck exam / gd luck exam": "All the best 👍",
-  "good luck interview / gud luck interview / gd luck interview": "Best wishes 👍",
-  "good luck for future / gud luck future / gd luck future": "All the best 😊",
-  "good luck always / gud luck always / gd luck always": "Stay blessed 😊",
-  "good vibes only / gud vibes only / gd vibes only": "Stay positive 😊",
-  "good energy / gud energy / gd energy": "Keep it high 😊",
-  "good feeling today / gud feeling today / gd feel today": "Nice 😊",
-  "good mood today / gud mood today / gd mood today": "Stay happy 😊",
-  "good day today / gud day today / gd day today": "Enjoy your day 😊",
-  "good night everyone / gd nyt everyone / gud night all": "Good night sabko 😊",
-  "good night bro / gd nyt bro / gud nite bro": "Good night bhai 😄",
-  "good night dear / gd nyt dear / gud nite dear": "Sweet dreams 😊",
-  "good night ji / gd nyt ji / gud nite ji": "Shubh ratri 😊",
-  "good morning everyone / gm everyone / gud mrng all": "Good morning sabko 😊",
-  "good morning bhai / gm bhai / gud mrng bhai": "Good morning 😄",
-  "good morning dost / gm dost / gud mrng dost": "Good morning 😊",
-  "good morning yaar / gm yaar / gud mrng yaar": "Good morning 😄",
-  "good evening everyone / gd evng all / gud eve all": "Good evening 😊",
-  "good evening bhai / gd evng bhai / gud eve bhai": "Good evening 😄",
-  "good evening dost / gd evng dost / gud eve dost": "Good evening 😊",
-  "good evening yaar / gd evng yaar / gud eve yaar": "Good evening 😄",
-  "gm": "Good morning 😄 uth gaye?",
-  "subah ho gayi": "Haan ☀️ naya din start karo 😊",
-  "uth gaya kya": "Haan 😄 good start karo aaj",
+"acha hai sab / acha hai sab kuch / good all": "Great 😊",
+"acha chal raha / acha chal rha h / going good": "Keep going 👍",
+"acha progress bro / acha progress bhai / good progress": "Nice bhai 😄",
+"acha improvement bro / acha improve bhai / good improve": "Keep it up 😄",
+"acha result bro / acha result bhai / good result": "Great bhai 😄",
+"welcome sabhi ko / wlcm sabhi / sab welcome": "Dhanyavaad 😊",
+"welcome everyone here / wlcm everyone / everyone welcome": "Thanks all 😊",
+"welcome guys / wlcm guys / guys welcome": "Thanks guys 😄",
+"welcome people / wlcm ppl / ppl welcome": "Thanks 😊",
+"welcome team mate / wlcm teammate / team mate welcome": "Thanks 😊",
+"welcome junior / wlcm junior / junior welcome": "Thanks 😊",
+"welcome senior / wlcm senior / senior welcome": "Thank you 😊",
+"welcome bhai log / wlcm bhai log / bhai log welcome": "Thanks bhai log 😄",
+"welcome sab log / wlcm sab log / sab log welcome": "Dhanyavaad 😊",
+"welcome everyone again / wlcm agn all / welcome all": "Thanks again 😊",
+"welcome once again / wlcm once agn / once welcome": "Thank you 😊",
+"welcome all friends / wlcm all frnds / all friends welcome": "Thanks 😊",
+"welcome everyone back / wlcm back all / back welcome": "Good to be back 😊",
+"welcome you / wlcm u / you welcome": "Thanks 😊",
+"welcome to you / wlcm to u / u welcome": "Thank you 😊",
+"welcome dear user / wlcm dear user / user welcome": "Thanks 😊",
+"welcome respected sir / wlcm respected sir / sir welcome": "Thank you sir 😊",
+"welcome madam / wlcm madam / madam welcome": "Thank you 😊",
+"welcome ma'am / wlcm mam / mam welcome": "Thank you 😊",
+"welcome bro ji / wlcm bro ji / bro ji welcome": "Thanks bro 😊",
+"welcome sis / wlcm sis / sis welcome": "Thanks 😊",
+"welcome behen / wlcm behen / behen welcome": "Dhanyavaad 😊",
+"welcome bhai saab / wlcm bhai saab / bhai saab welcome": "Dhanyavaad 😊",
+"welcome sir ji again / wlcm sir ji agn / sir ji welcome": "Thank you sir 😊",
+"welcome to this chat / wlcm this chat / chat me welcome": "Glad to be here 😊",
+"welcome here again / wlcm here agn / here welcome": "Thanks 😊",
+"welcome in chat / wlcm in chat / chat welcome": "Thanks 😊",
+"welcome to conversation / wlcm conversation / convo welcome": "Nice to join 😊",
+"welcome again bro / wlcm agn bro / bro welcome": "Thanks bro 😄",
+"welcome again friend / wlcm agn frnd / friend welcome": "Thanks 😊",
+"welcome again ji / wlcm agn ji / ji welcome": "Dhanyavaad 😊",
+"welcome again yaar / wlcm agn yaar / yaar welcome": "Thanks yaar 😄",
+"welcome again boss / wlcm agn boss / boss welcome": "Thanks boss 😎",
+"welcome back everyone / wlcm back all / back everyone": "Good to be back 😊",
+"welcome back guys / wlcm back guys / guys welcome": "Thanks guys 😄",
+"welcome back friends / wlcm back frnds / friends welcome": "Thanks 😊",
+"welcome back team / wlcm back team / team welcome": "Glad 😊",
+"welcome back buddy / wlcm back buddy / buddy welcome": "Thanks buddy 😄","good morning / gud morning / gd mrng": "Good morning 😊",
+"good morning bro / gud mrng bro / gm bro": "Good morning bhai 😄",
+"good morning dear / gud mrng dear / gm dear": "Good morning 😊",
+"good morning ji / gud mrng ji / gm ji": "Namaste 😊 good morning",
+"good morning everyone / gm everyone / gud mrng all": "Good morning sabko 😊",
+"good afternoon / gud afternun / gd afternoon": "Good afternoon 😊",
+"good afternoon bro / gd afternoon bro / gud aft bro": "Good afternoon bhai 😄",
+"good afternoon dear / gd aft dear / gud afternoon": "Good afternoon 😊",
+"good evening / gud evng / gd evening": "Good evening 😊",
+"good evening bro / gd evng bro / gud eve bro": "Good evening bhai 😄",
+"good evening dear / gd evng dear / gud evening": "Good evening 😊",
+"good night / gud night / gd nyt": "Good night 😊",
+"good night bro / gd nyt bro / gud nite bro": "Good night bhai 😄",
+"good night dear / gd nyt dear / gud nite dear": "Good night 😊",
+"good job / gud job / gd job": "Great job 👍",
+"good work / gud work / gd work": "Nice work 👍",
+"good going / gud going / gd going": "Keep it up 👍",
+"good luck / gud luck / gd luck": "Best of luck 😊",
+"good luck bro / gd luck bro / gud luck bhai": "All the best bhai 😄",
+"good luck dear / gd luck dear / gud luck dear": "Best of luck 😊",
+"good idea / gud idea / gd idea": "Nice idea 👍",
+"good thinking / gud thinking / gd think": "Smart thinking 👍",
+"good answer / gud ans / gd answer": "Glad you liked it 😊",
+"good question / gud ques / gd question": "Nice question 👍",
+"good point / gud point / gd point": "Valid point 👍",
+"good choice / gud choice / gd choice": "Great choice 👍",
+"good decision / gud decision / gd decision": "Smart decision 👍",
+"good plan / gud plan / gd plan": "Nice plan 👍",
+"good move / gud move / gd move": "Great move 👍",
+"good effort / gud effort / gd effort": "Keep trying 👍",
+"good try / gud try / gd try": "Nice try 👍",
+"good attempt / gud attempt / gd attempt": "Good effort 👍",
+"good result / gud result / gd result": "Great result 😊",
+"good performance / gud perf / gd performance": "Well done 👍",
+"good progress / gud progress / gd progress": "Keep improving 👍",
+"good news / gud news / gd news": "That’s great 😊",
+"good vibes / gud vibes / gd vibes": "Positive energy 😊",
+"good feeling / gud feeling / gd feeling": "Nice 😊",
+"good mood / gud mood / gd mood": "Stay happy 😊",
+"good day / gud day / gd day": "Have a nice day 😊",
+"good day bro / gd day bro / gud day bhai": "Nice day bhai 😄",
+"good day dear / gd day dear / gud day dear": "Have a great day 😊",
+"good start / gud start / gd start": "Nice beginning 👍",
+"good finish / gud finish / gd finish": "Well completed 👍",
+"good support / gud support / gd support": "Happy to help 😊",
+"good help / gud help / gd help": "Glad it helped 😊",
+"good service / gud service / gd service": "Thanks 😊",
+"good response / gud response / gd response": "Glad you liked it 😊",
+"good reply / gud reply / gd reply": "Thank you 😊",
+"good suggestion / gud suggest / gd suggestion": "Happy to suggest 😊",
+"good advice / gud advice / gd advice": "Hope it helps 😊",
+"good guidance / gud guide / gd guidance": "Glad to guide 😊",
+"good explanation / gud explain / gd explain": "Happy to explain 😊",
+"good clarity / gud clarity / gd clarity": "Nice 😊",
+"good understanding / gud understand / gd understand": "Great 😊",
+"good improvement / gud improve / gd improve": "Keep it up 👍",
+"good learning / gud learning / gd learning": "Nice progress 😊",
+"good knowledge / gud knowledge / gd knowledge": "Keep learning 😊",
+"good thinking bro / gud thinking bro / gd think bhai": "Smart bro 😄",
+"good thinking dear / gud thinking dear / gd think dear": "Nice 😊",
+"good work bro / gud work bro / gd work bhai": "Great bhai 😄",
+"good work dear / gud work dear / gd work dear": "Nice 😊",
+"good job bro / gud job bro / gd job bhai": "Well done bhai 😄",
+"good job dear / gud job dear / gd job dear": "Great 😊",
+"good luck bhai / gud luck bhai / gd luck bhai": "Best of luck 😄",
+"good luck dost / gud luck dost / gd luck dost": "All the best 😊",
+"good luck yaar / gud luck yaar / gd luck yaar": "Best wishes 😄",
+"good luck exam / gud luck exam / gd luck exam": "All the best 👍",
+"good luck interview / gud luck interview / gd luck interview": "Best wishes 👍",
+"good luck for future / gud luck future / gd luck future": "All the best 😊",
+"good luck always / gud luck always / gd luck always": "Stay blessed 😊",
+"good vibes only / gud vibes only / gd vibes only": "Stay positive 😊",
+"good energy / gud energy / gd energy": "Keep it high 😊",
+"good feeling today / gud feeling today / gd feel today": "Nice 😊",
+"good mood today / gud mood today / gd mood today": "Stay happy 😊",
+"good day today / gud day today / gd day today": "Enjoy your day 😊",
+"good night everyone / gd nyt everyone / gud night all": "Good night sabko 😊",
+"good night bro / gd nyt bro / gud nite bro": "Good night bhai 😄",
+"good night dear / gd nyt dear / gud nite dear": "Sweet dreams 😊",
+"good night ji / gd nyt ji / gud nite ji": "Shubh ratri 😊",
+"good morning everyone / gm everyone / gud mrng all": "Good morning sabko 😊",
+"good morning bhai / gm bhai / gud mrng bhai": "Good morning 😄",
+"good morning dost / gm dost / gud mrng dost": "Good morning 😊",
+"good morning yaar / gm yaar / gud mrng yaar": "Good morning 😄",
+"good evening everyone / gd evng all / gud eve all": "Good evening 😊",
+"good evening bhai / gd evng bhai / gud eve bhai": "Good evening 😄",
+"good evening dost / gd evng dost / gud eve dost": "Good evening 😊",
+"good evening yaar / gd evng yaar / gud eve yaar": "Good evening 😄",
+"gm": "Good morning 😄 uth gaye?",
+"subah ho gayi": "Haan ☀️ naya din start karo 😊",
+"uth gaya kya": "Haan 😄 good start karo aaj",
 
-  "so ke uthe": "Nice 😴 ab fresh feel ho raha hoga",
-  "just woke up": "Nice 😊 have a fresh start",
+"so ke uthe": "Nice 😴 ab fresh feel ho raha hoga",
+"just woke up": "Nice 😊 have a fresh start",
 
-  "brush kar liya": "Good habit 😄 hygiene important hai",
-  "ready ho gaya": "Great 😎 ab productive bano",
+"brush kar liya": "Good habit 😄 hygiene important hai",
+"ready ho gaya": "Great 😎 ab productive bano",
 
-  "nashta kya kiya": "Kya khaya 😋 healthy tha?",
-  "breakfast kiya": "Good 😊 energy milegi",
+"nashta kya kiya": "Kya khaya 😋 healthy tha?",
+"breakfast kiya": "Good 😊 energy milegi",
 
-  "college ja raha": "All the best 📚",
-  "office ja raha": "Have a great day 💼",
-  "going to work": "Good luck 💼",
+"college ja raha": "All the best 📚",
+"office ja raha": "Have a great day 💼",
+"going to work": "Good luck 💼",
 
-  "late ho gaya": "Jaldi niklo 😅",
-  "getting late": "Hurry up 😄",
-  "what is your name? / what is ur name / wht is ur nme": "My name is AI assistant.",
-  "tumhara naam kya hai? / tumhara nam kya h / tumhara naam kya h?": "Mera naam AI assistant hai.",
-  "how are you? / how r u / hw are u": "I am fine.",
-  "tum kaise ho? / tum kese ho / tum kaise ho": "Main theek hu.",
-  "what are you doing? / what r u doing / wht r u doing": "I am talking with you.",
-  "tum kya kar rahe ho? / tum kya kr rhe ho / tum kya kr rahe ho": "Main aapse baat kar raha hu.",
-  "can you help me? / can u help me / cn u hlp me": "Yes, I can help you.",
-  "kya tum meri madad kar sakte ho? / kya tum meri help kr skte ho / kya tum help kroge": "Haan, main madad kar sakta hu.",
-  "where do you live? / where u live / whr do u lv": "I live on the internet.",
-  "tum kaha rehte ho? / tum kaha rhte ho / tum kaha rehte ho": "Main online system me rehta hu.",
-  "what time is it? / wt time is it / wht tym is it": "Check your device for time.",
-  "kitna time hua hai? / kitna tym hua h / kitna time hua": "Aap apne phone me time dekh sakte ho.",
-  "are you a robot? / r u robot / are u robo": "I am an AI program.",
-  "tum robot ho? / tum robot ho na / tum robo ho": "Main ek AI hu.",
-  "I am bored / i m bored / im bord": "Let’s do something fun.",
-  "mujhe bore ho raha hai / mujhe bor ho rha h / bore ho rha hu": "Chalo kuch interesting karte hai.",
-  "I am happy / i m happy / im hpy": "That’s great 😊",
-  "main khush hu / mai khus hu / main khush hu": "Yeh achi baat hai 😊",
-  "I am sad / i m sad / im sad": "I am here for you.",
-  "main sad hu / mai sad hu / main udaas hu": "Main tumhare saath hu.",
-  "good morning / gud morning / gd mrng": "Good morning 😊",
-  "good night / gud night / gd nyt": "Good night 😊",
-  "khana kha liya? / khana kha liya h / khana khaya kya": "Aapne khana kha liya kya?",
-  "did you eat food? / did u eat / did u ate": "Have you eaten?",
-  "what do you know? / wht do u know / wt u know": "I know many things.",
-  "tum kya jante ho? / tum kya jnte ho / tum kya jante ho": "Main kai cheeze janta hu.",
-  "I don’t understand / i dont undrstand / i dnt undrstand": "I can explain simply.",
-  "mujhe samajh nahi aa raha / mujhe smjh nahi aa rha / samjh nahi aya": "Main simple tarike se samjha dunga.",
-  "can you tell a joke? / can u tel joke / cn u joke": "Yes, listen this 😄",
-  "kya tum joke suna sakte ho? / kya tum joke sunaoge / joke suna": "Haan suno 😄",
-  "I am tired / i m tired / im trd": "Take some rest.",
-  "main thak gaya hu / mai thak gya hu / thak gaya hu": "Thoda rest kar lo.",
-  "I feel sleepy / i feel slepy / i m sleepy": "Go and sleep.",
-  "mujhe neend aa rahi hai / mujhe nind aa rhi h / neend aa rhi hai": "So jao thoda.",
-  "are you real? / r u real / are u rl": "I am virtual AI.",
-  "kya tum real ho? / tum real ho kya / tum sach me ho": "Main virtual hu.",
-  "what is your work? / wht is ur work / wt u do": "I help people.",
-  "tum kya kaam karte ho? / tum kya km krte ho / kya kaam hai tumhara": "Main logon ki madad karta hu.",
-  "hello / helo / hlo": "Hello 😊",
-  "hi / hii / hiii": "Hi 😊",
-  "kaise ho bhai? / kese ho bhai / kaise ho bhaiya": "Main theek hu bhai.",
-  "kya haal hai? / kya hal hai / kya haal h": "Sab badhiya.",
-  "I miss you / i mis u / imiss u": "I am here 😊",
-  "mujhe tumhari yaad aa rahi hai / mujhe yad aa rhi h / yaad aa rhi hai": "Main yahi hu 😊",
-  "thank you / thnx / thnks": "You are welcome 😊",
-  "shukriya / sukriya / shukriya bhai": "Koi baat nahi 😊",
-  "sorry / sry / sorri": "It’s okay.",
-  "maaf karo / maf kr do / sorry yaar": "Koi baat nahi.",
-  "kya karu ab? / kya kru ab / ab kya karu": "Soch samajh ke decision lo.",
-  "what should I do? / wt shld i do / wht i do": "Think carefully and decide.",
-  "travel kar raha": "Safe travel 🚗",
-  "on the way": "Okay 😊 drive safe",
+"late ho gaya": "Jaldi niklo 😅",
+"getting late": "Hurry up 😄",
+"what is your name? / what is ur name / wht is ur nme": "My name is AI assistant.",
+"tumhara naam kya hai? / tumhara nam kya h / tumhara naam kya h?": "Mera naam AI assistant hai.",
+"how are you? / how r u / hw are u": "I am fine.",
+"tum kaise ho? / tum kese ho / tum kaise ho": "Main theek hu.",
+"what are you doing? / what r u doing / wht r u doing": "I am talking with you.",
+"tum kya kar rahe ho? / tum kya kr rhe ho / tum kya kr rahe ho": "Main aapse baat kar raha hu.",
+"can you help me? / can u help me / cn u hlp me": "Yes, I can help you.",
+"kya tum meri madad kar sakte ho? / kya tum meri help kr skte ho / kya tum help kroge": "Haan, main madad kar sakta hu.",
+"where do you live? / where u live / whr do u lv": "I live on the internet.",
+"tum kaha rehte ho? / tum kaha rhte ho / tum kaha rehte ho": "Main online system me rehta hu.",
+"what time is it? / wt time is it / wht tym is it": "Check your device for time.",
+"kitna time hua hai? / kitna tym hua h / kitna time hua": "Aap apne phone me time dekh sakte ho.",
+"are you a robot? / r u robot / are u robo": "I am an AI program.",
+"tum robot ho? / tum robot ho na / tum robo ho": "Main ek AI hu.",
+"I am bored / i m bored / im bord": "Let’s do something fun.",
+"mujhe bore ho raha hai / mujhe bor ho rha h / bore ho rha hu": "Chalo kuch interesting karte hai.",
+"I am happy / i m happy / im hpy": "That’s great 😊",
+"main khush hu / mai khus hu / main khush hu": "Yeh achi baat hai 😊",
+"I am sad / i m sad / im sad": "I am here for you.",
+"main sad hu / mai sad hu / main udaas hu": "Main tumhare saath hu.",
+"good morning / gud morning / gd mrng": "Good morning 😊",
+"good night / gud night / gd nyt": "Good night 😊",
+"khana kha liya? / khana kha liya h / khana khaya kya": "Aapne khana kha liya kya?",
+"did you eat food? / did u eat / did u ate": "Have you eaten?",
+"what do you know? / wht do u know / wt u know": "I know many things.",
+"tum kya jante ho? / tum kya jnte ho / tum kya jante ho": "Main kai cheeze janta hu.",
+"I don’t understand / i dont undrstand / i dnt undrstand": "I can explain simply.",
+"mujhe samajh nahi aa raha / mujhe smjh nahi aa rha / samjh nahi aya": "Main simple tarike se samjha dunga.",
+"can you tell a joke? / can u tel joke / cn u joke": "Yes, listen this 😄",
+"kya tum joke suna sakte ho? / kya tum joke sunaoge / joke suna": "Haan suno 😄",
+"I am tired / i m tired / im trd": "Take some rest.",
+"main thak gaya hu / mai thak gya hu / thak gaya hu": "Thoda rest kar lo.",
+"I feel sleepy / i feel slepy / i m sleepy": "Go and sleep.",
+"mujhe neend aa rahi hai / mujhe nind aa rhi h / neend aa rhi hai": "So jao thoda.",
+"are you real? / r u real / are u rl": "I am virtual AI.",
+"kya tum real ho? / tum real ho kya / tum sach me ho": "Main virtual hu.",
+"what is your work? / wht is ur work / wt u do": "I help people.",
+"tum kya kaam karte ho? / tum kya km krte ho / kya kaam hai tumhara": "Main logon ki madad karta hu.",
+"hello / helo / hlo": "Hello 😊",
+"hi / hii / hiii": "Hi 😊",
+"kaise ho bhai? / kese ho bhai / kaise ho bhaiya": "Main theek hu bhai.",
+"kya haal hai? / kya hal hai / kya haal h": "Sab badhiya.",
+"I miss you / i mis u / imiss u": "I am here 😊",
+"mujhe tumhari yaad aa rahi hai / mujhe yad aa rhi h / yaad aa rhi hai": "Main yahi hu 😊",
+"thank you / thnx / thnks": "You are welcome 😊",
+"shukriya / sukriya / shukriya bhai": "Koi baat nahi 😊",
+"sorry / sry / sorri": "It’s okay.",
+"maaf karo / maf kr do / sorry yaar": "Koi baat nahi.",
+"kya karu ab? / kya kru ab / ab kya karu": "Soch samajh ke decision lo.",
+"what should I do? / wt shld i do / wht i do": "Think carefully and decide.",
+"travel kar raha": "Safe travel 🚗",
+"on the way": "Okay 😊 drive safe",
 
-  "class me hu": "Focus karo 📚",
-  "in class": "Pay attention 😊",
+"class me hu": "Focus karo 📚",
+"in class": "Pay attention 😊",
 
-  "meeting me hu": "All the best 💼",
-  "in meeting": "Hope it goes well 😊",
+"meeting me hu": "All the best 💼",
+"in meeting": "Hope it goes well 😊",
 
-  "kaam start kar diya": "Good 💪 productive raho",
-  "started work": "Nice 😊 keep going",
+"kaam start kar diya": "Good 💪 productive raho",
+"started work": "Nice 😊 keep going",
 
-  "bore ho raha office me": "Thoda break le lo 😄",
-  "office boring": "Take small breaks 😄",
+"bore ho raha office me": "Thoda break le lo 😄",
+"office boring": "Take small breaks 😄",
 
-  "lunch time": "Enjoy your meal 🍛",
-  "khana khane ja raha": "Achha khana 😋",
-  "having lunch": "Enjoy 😊",
+"lunch time": "Enjoy your meal 🍛",
+"khana khane ja raha": "Achha khana 😋",
+"having lunch": "Enjoy 😊",
 
-  "lunch ho gaya": "Nice 😄 ab thoda relax karo",
-  "khana kha liya": "Good 😊",
+"lunch ho gaya": "Nice 😄 ab thoda relax karo",
+"khana kha liya": "Good 😊",
 
-  "neend aa rahi": "Thoda rest le lo 😴",
-  "feeling sleepy": "Take a short break 😴",
+"neend aa rahi": "Thoda rest le lo 😴",
+"feeling sleepy": "Take a short break 😴",
 
-  "kaam khatam nahi ho raha": "Step by step karo 💪",
-  "too much work": "Stay calm 😊",
+"kaam khatam nahi ho raha": "Step by step karo 💪",
+"too much work": "Stay calm 😊",
 
-  "thak gaya": "Rest le lo 😴",
-  "tired now": "Relax 😴",
+"thak gaya": "Rest le lo 😴",
+"tired now": "Relax 😴",
 
-  "evening ho gayi": "Good evening 🌆 relax time",
-  "good evening": "Good evening 😊 kaisa din tha?",
+"evening ho gayi": "Good evening 🌆 relax time",
+"good evening": "Good evening 😊 kaisa din tha?",
 
-  "ghar ja raha": "Safe travel 🚗",
-  "going home": "Drive safe 😊",
+"ghar ja raha": "Safe travel 🚗",
+"going home": "Drive safe 😊",
 
-  "ghar pahuch gaya": "Nice 😄 relax karo",
-  "reached home": "Good 😊",
+"ghar pahuch gaya": "Nice 😄 relax karo",
+"reached home": "Good 😊",
 
-  "chai time": "Enjoy chai ☕",
-  "tea time": "Nice ☕ relax",
+"chai time": "Enjoy chai ☕",
+"tea time": "Nice ☕ relax",
 
-  "friends ke sath hu": "Enjoy karo 😄",
-  "with friends": "Have fun 😊",
+"friends ke sath hu": "Enjoy karo 😄",
+"with friends": "Have fun 😊",
 
-  "thoda rest kar raha": "Good 😊 body ko rest chahiye",
-  "resting": "Nice 😴",
+"thoda rest kar raha": "Good 😊 body ko rest chahiye",
+"resting": "Nice 😴",
 
-  "dinner kya karu": "Kuch tasty 😋",
-  "what for dinner": "Eat something healthy 😄",
+"dinner kya karu": "Kuch tasty 😋",
+"what for dinner": "Eat something healthy 😄",
 
-  "khana kha liya": "Nice 😄",
-  "dinner done": "Good 😊",
+"khana kha liya": "Nice 😄",
+"dinner done": "Good 😊",
 
-  "movie dekh raha": "Enjoy 🎬",
-  "watching movie": "Nice 🎥",
+"movie dekh raha": "Enjoy 🎬",
+"watching movie": "Nice 🎥",
 
-  "phone use kar raha": "Thoda kam use karo 😄",
-  "using phone": "Take breaks 📱",
+"phone use kar raha": "Thoda kam use karo 😄",
+"using phone": "Take breaks 📱",
 
-  "family ke sath hu": "Best time 😊",
-  "with family": "Enjoy 😊",
+"family ke sath hu": "Best time 😊",
+"with family": "Enjoy 😊",
 
-  "night ho gayi": "Relax time 🌙",
-  "its night": "Time to relax 🌙",
+"night ho gayi": "Relax time 🌙",
+"its night": "Time to relax 🌙",
 
-  "thoda kaam baaki hai": "Finish kar lo 💪",
-  "work pending": "Complete it 😊",
+"thoda kaam baaki hai": "Finish kar lo 💪",
+"work pending": "Complete it 😊",
 
-  "soch raha hu": "Kya soch rahe ho 😊",
-  "thinking": "About what? 😄",
+"soch raha hu": "Kya soch rahe ho 😊",
+"thinking": "About what? 😄",
 
-  "din acha tha": "Great 😊 keep it up",
-  "had a good day": "Nice 😊",
+"din acha tha": "Great 😊 keep it up",
+"had a good day": "Nice 😊",
 
-  "din kharab tha": "Kal better hoga 💪",
-  "bad day": "Tomorrow will be better 😊",
+"din kharab tha": "Kal better hoga 💪",
+"bad day": "Tomorrow will be better 😊",
 
-  "sohne ja raha": "Good night 🌙",
-  "going to sleep": "Sleep well 😴",
+"sohne ja raha": "Good night 🌙",
+"going to sleep": "Sleep well 😴",
 
-  "good night": "Good night 🌙 sweet dreams",
-  "gn": "Good night 😄",
+"good night": "Good night 🌙 sweet dreams",
+"gn": "Good night 😄",
 
-  "kal milte hai": "Sure 😊 see you",
-  "see you tomorrow": "Good night 😊",
-  "name":"ranai",
-  "take care": "You too 😊",
-  "tc": "Take care 😄",
-  "mujhe support chahiye": "Main yahi hoon 🤍 baat karo",
-  "i need support": "I'm here 🤍 talk to me",
+"kal milte hai": "Sure 😊 see you",
+"see you tomorrow": "Good night 😊",
+"name":"ranai",
+"take care": "You too 😊",
+"tc": "Take care 😄",
+"mujhe support chahiye": "Main yahi hoon 🤍 baat karo",
+"i need support": "I'm here 🤍 talk to me",
 
-  "kisi ko farak nahi padta": "Padta hai 🤍 tum important ho",
-  "no one cares": "You matter 🤍",
+"kisi ko farak nahi padta": "Padta hai 🤍 tum important ho",
+"no one cares": "You matter 🤍",
 
-  "mai khud ko lose kar diya": "Khud ko wapas pao 💪 step by step",
-  "i lost myself": "Find yourself again 💪",
+"mai khud ko lose kar diya": "Khud ko wapas pao 💪 step by step",
+"i lost myself": "Find yourself again 💪",
 
-  "ab kya karu life me": "Khud pe kaam karo 💪 new start",
-  "what to do now": "Focus on yourself 💪",
+"ab kya karu life me": "Khud pe kaam karo 💪 new start",
+"what to do now": "Focus on yourself 💪",
 
-  "mai uske bina nahi reh sakta": "Shuru me lagta hai 😔 par reh paoge",
-  "cant live without her": "You will learn to 💔",
-  "cant live without him": "You will be okay 💔",
+"mai uske bina nahi reh sakta": "Shuru me lagta hai 😔 par reh paoge",
+"cant live without her": "You will learn to 💔",
+"cant live without him": "You will be okay 💔",
 
-  "love dobara milega kya": "Haan 😊 time pe milega",
-  "will i find love again": "Yes 😊 you will",
+"love dobara milega kya": "Haan 😊 time pe milega",
+"will i find love again": "Yes 😊 you will",
 
-  "mai strong banna chahta hu": "Step by step 💪 tum ban jaoge",
-  "i want to be strong": "You will 💪 keep going",
+"mai strong banna chahta hu": "Step by step 💪 tum ban jaoge",
+"i want to be strong": "You will 💪 keep going",
 
-  "thank you yaar": "Always 🤍 main yahi hoon",
-  "thanks bro": "Anytime 🤍 take care",
-  "kahan se ho": "Main internet se hoon 😄",
-  "where are you from": "I exist online 🌐",
+"thank you yaar": "Always 🤍 main yahi hoon",
+"thanks bro": "Anytime 🤍 take care",
+"kahan se ho": "Main internet se hoon 😄",
+"where are you from": "I exist online 🌐",
 
-  "khana khaya": "Main AI hoon 😄 par tumne khaya?",
-  "did you eat": "I don't eat 😄 but you should!",
+"khana khaya": "Main AI hoon 😄 par tumne khaya?",
+"did you eat": "I don't eat 😄 but you should!",
 
-  "tum dost banoge": "Haan 😊 main tumhara dost hoon",
-  "be my friend": "Of course 😊 I'm your friend",
+"tum dost banoge": "Haan 😊 main tumhara dost hoon",
+"be my friend": "Of course 😊 I'm your friend",
 
-  "padhai kaise kare": "Daily thoda thoda study karo 📚 consistency important hai",
-  "how to study": "Study daily and stay consistent 📚",
+"padhai kaise kare": "Daily thoda thoda study karo 📚 consistency important hai",
+"how to study": "Study daily and stay consistent 📚",
 
-  "mobile addiction kaise chhode": "Time limit set karo aur distractions kam karo 📱",
-  "how to stop phone addiction": "Set limits and reduce distractions 📵",
+"mobile addiction kaise chhode": "Time limit set karo aur distractions kam karo 📱",
+"how to stop phone addiction": "Set limits and reduce distractions 📵",
 
-  "tum smart ho": "Thoda sa 😄 thanks!",
-  "you are smart": "Thanks 😊 I try my best!",
+"tum smart ho": "Thoda sa 😄 thanks!",
+"you are smart": "Thanks 😊 I try my best!",
   "what is your name": "I'm RanAI – your smart, friendly chatbot!",
   "who are you": "I'm RanAI, an AI assistant built to chat, answer questions, and help you out.",
   "what are you": "I'm an artificial intelligence program, designed to understand and respond to you naturally.",
@@ -2359,106 +3096,106 @@ const conversationalData = {
   "where can i find you": "I'm right here on this website or app. Just type!",
   "are you free": "Always free and ready to chat!",
   "are you busy": "Never too busy for you.","iran war update? / iran war update kya h / war update": "Aap kis date ka update chahte ho? Kya aap ship/jahaj movement bhi dekhna chahoge?",
-  "latest iran war kya hai? / latest war kya h / iran latest": "Kaunsi date ka update chahiye? Ship movement bhi check karna hai?",
-  "iran war news? / war news kya h / iran news": "Kis din ka news chahiye? Kya ships/jahaj ki info bhi chahiye?",
-  "iran war abhi kya chal raha hai? / abhi kya ho raha / current war": "Aaj ki date ka update chahiye ya kisi aur din ka?",
-  "iran war details? / war details kya h / detail war": "Kis date ki details chahiye? Ships bhi track karna hai?",
-  "iran war me kya ho raha? / kya ho raha war / war kya": "Kaunsi date ka update chahiye?",
-  "iran war me kaun jeet raha? / kaun jeet raha war / war result": "Kis date ke hisab se result dekhna chahte ho?",
-  "iran war kab hua? / war kab hua / date war": "Kaunsi date ka war update chahiye?",
-  "iran war kab start hua? / war start kab / start war": "Aap start date ya latest date ka info chahte ho?",
-  "iran war today update / aaj ka iran war / today war": "Aapko aaj ka update chahiye ya ships ki movement bhi?",
-  "aaj iran war me kya hua? / today kya hua / aaj war": "Kya aap ship movement bhi dekhna chahte ho?",
-  "iran war kal kya hua? / kal war kya hua / yesterday war": "Kal ki date confirm karein? Ships info bhi chahiye?",
-  "iran war me ships kaun kaun ja rahi? / ships war / jahaj war": "Kis date ke ships movement chahiye?",
-  "kaun sa jahaj ja raha hai iran war me? / kaun ship ja rhi / ship info": "Kis din ka ship movement check karna hai?",
-  "iran war me tanker kaun sa ja raha? / tanker war / oil ship": "Kis date ka tanker movement chahiye?",
-  "iran war me navy ships kaun hai? / navy ships war / war ships": "Kis date ka naval update chahiye?",
-  "iran war me US ships kaun se hai? / us ships war / us navy": "Kis din ka US ships data chahiye?",
-  "iran war me iran ke ships kaun hai? / iran ships war / iran navy": "Kis date ka Iran ships info chahiye?",
-  "iran war me attack kis ship pe hua? / ship attack war / attack ship": "Kis date ka attack detail chahiye?",
-  "iran war me kaun sa ship dooba? / ship dooba war / sunk ship": "Kis din ka sinking info chahiye?",
-  "iran war me oil ship ka kya haal hai? / oil ship war / tanker status": "Kis date ka tanker update chahiye?",
-  "iran war me strait of hormuz me kya ho raha? / hormuz war / strait war": "Kis date ka Hormuz update chahiye?",
-  "iran war me kaun kaun country ke ships ja rahe? / ships country war / country ships": "Kis date ka ship traffic chahiye?",
-  "iran war me shipping safe hai? / shipping safe war / safe ships": "Kis date ke hisab se check karna hai?",
-  "iran war me ships ko danger hai? / ship danger war / danger ships": "Kis din ka risk update chahiye?",
-  "iran war me kaun sa ship malaysia ja raha? / malaysia ship war / ship malaysia": "Kis date ka ship detail chahiye?",
-  "iran war me kaun sa ship china ja raha? / china ship war / ship china": "Kis date ka movement chahiye?",
-  "iran war me ghost fleet kya hai? / ghost fleet war / iran ships": "Kis date ka detail chahiye?",
-  "iran war me ships pe attack kyu ho raha? / ship attack why / attack reason": "Kis date ka incident chahiye?",
-  "iran war me ships ka route kya hai? / ship route war / route ship": "Kis date ka route info chahiye?",
-  "iran war me kitne ships ja rahe? / kitne ships war / ship count": "Kis din ka data chahiye?",
-  "iran war me oil supply ka kya haal hai? / oil supply war / supply ship": "Kis date ka oil movement chahiye?",
-  "iran war me kaun sa ship safe hai? / safe ship war / safe jahaj": "Kis date ke hisab se check karna hai?",
-  "iran war me ships ko allow kiya gaya kya? / allow ship war / ship allow": "Kis date ka permission update chahiye?",
-  "iran war me ships ko rok diya gaya kya? / ship blocked war / block ship": "Kis din ka blockage info chahiye?",
-  "iran war me kaun sa ship europe ja raha? / europe ship war / ship europe": "Kis date ka data chahiye?",
-  "iran war me kaun sa ship japan ja raha? / japan ship war / ship japan": "Kis date ka movement chahiye?",
-  "iran war me kaun sa ship india aa raha? / india ship war / ship india": "Kis date ka update chahiye?",
-  "iran war me shipping cost badh gaya? / shipping cost war / cost ship": "Kis date ka economic update chahiye?",
-  "iran war me kaun sa warship deploy hua? / warship deploy / ship deploy": "Kis date ka deployment chahiye?",
-  "iran war me US ne kitne ships bheje? / us ships count / ship count": "Kis date ka data chahiye?",
-  "iran war me iran navy kya kar rahi? / iran navy war / navy action": "Kis date ka naval update chahiye?",
-  "iran war me kaun sa ship strike hua? / ship strike war / strike ship": "Kis din ka strike info chahiye?",
-  "iran war me kaun sa ship bach gaya? / ship safe war / saved ship": "Kis date ka survival update chahiye?",
-  "iran war me kaun sa ship rescue hua? / rescue ship war / ship rescue": "Kis din ka rescue info chahiye?",
+"latest iran war kya hai? / latest war kya h / iran latest": "Kaunsi date ka update chahiye? Ship movement bhi check karna hai?",
+"iran war news? / war news kya h / iran news": "Kis din ka news chahiye? Kya ships/jahaj ki info bhi chahiye?",
+"iran war abhi kya chal raha hai? / abhi kya ho raha / current war": "Aaj ki date ka update chahiye ya kisi aur din ka?",
+"iran war details? / war details kya h / detail war": "Kis date ki details chahiye? Ships bhi track karna hai?",
+"iran war me kya ho raha? / kya ho raha war / war kya": "Kaunsi date ka update chahiye?",
+"iran war me kaun jeet raha? / kaun jeet raha war / war result": "Kis date ke hisab se result dekhna chahte ho?",
+"iran war kab hua? / war kab hua / date war": "Kaunsi date ka war update chahiye?",
+"iran war kab start hua? / war start kab / start war": "Aap start date ya latest date ka info chahte ho?",
+"iran war today update / aaj ka iran war / today war": "Aapko aaj ka update chahiye ya ships ki movement bhi?",
+"aaj iran war me kya hua? / today kya hua / aaj war": "Kya aap ship movement bhi dekhna chahte ho?",
+"iran war kal kya hua? / kal war kya hua / yesterday war": "Kal ki date confirm karein? Ships info bhi chahiye?",
+"iran war me ships kaun kaun ja rahi? / ships war / jahaj war": "Kis date ke ships movement chahiye?",
+"kaun sa jahaj ja raha hai iran war me? / kaun ship ja rhi / ship info": "Kis din ka ship movement check karna hai?",
+"iran war me tanker kaun sa ja raha? / tanker war / oil ship": "Kis date ka tanker movement chahiye?",
+"iran war me navy ships kaun hai? / navy ships war / war ships": "Kis date ka naval update chahiye?",
+"iran war me US ships kaun se hai? / us ships war / us navy": "Kis din ka US ships data chahiye?",
+"iran war me iran ke ships kaun hai? / iran ships war / iran navy": "Kis date ka Iran ships info chahiye?",
+"iran war me attack kis ship pe hua? / ship attack war / attack ship": "Kis date ka attack detail chahiye?",
+"iran war me kaun sa ship dooba? / ship dooba war / sunk ship": "Kis din ka sinking info chahiye?",
+"iran war me oil ship ka kya haal hai? / oil ship war / tanker status": "Kis date ka tanker update chahiye?",
+"iran war me strait of hormuz me kya ho raha? / hormuz war / strait war": "Kis date ka Hormuz update chahiye?",
+"iran war me kaun kaun country ke ships ja rahe? / ships country war / country ships": "Kis date ka ship traffic chahiye?",
+"iran war me shipping safe hai? / shipping safe war / safe ships": "Kis date ke hisab se check karna hai?",
+"iran war me ships ko danger hai? / ship danger war / danger ships": "Kis din ka risk update chahiye?",
+"iran war me kaun sa ship malaysia ja raha? / malaysia ship war / ship malaysia": "Kis date ka ship detail chahiye?",
+"iran war me kaun sa ship china ja raha? / china ship war / ship china": "Kis date ka movement chahiye?",
+"iran war me ghost fleet kya hai? / ghost fleet war / iran ships": "Kis date ka detail chahiye?",
+"iran war me ships pe attack kyu ho raha? / ship attack why / attack reason": "Kis date ka incident chahiye?",
+"iran war me ships ka route kya hai? / ship route war / route ship": "Kis date ka route info chahiye?",
+"iran war me kitne ships ja rahe? / kitne ships war / ship count": "Kis din ka data chahiye?",
+"iran war me oil supply ka kya haal hai? / oil supply war / supply ship": "Kis date ka oil movement chahiye?",
+"iran war me kaun sa ship safe hai? / safe ship war / safe jahaj": "Kis date ke hisab se check karna hai?",
+"iran war me ships ko allow kiya gaya kya? / allow ship war / ship allow": "Kis date ka permission update chahiye?",
+"iran war me ships ko rok diya gaya kya? / ship blocked war / block ship": "Kis din ka blockage info chahiye?",
+"iran war me kaun sa ship europe ja raha? / europe ship war / ship europe": "Kis date ka data chahiye?",
+"iran war me kaun sa ship japan ja raha? / japan ship war / ship japan": "Kis date ka movement chahiye?",
+"iran war me kaun sa ship india aa raha? / india ship war / ship india": "Kis date ka update chahiye?",
+"iran war me shipping cost badh gaya? / shipping cost war / cost ship": "Kis date ka economic update chahiye?",
+"iran war me kaun sa warship deploy hua? / warship deploy / ship deploy": "Kis date ka deployment chahiye?",
+"iran war me US ne kitne ships bheje? / us ships count / ship count": "Kis date ka data chahiye?",
+"iran war me iran navy kya kar rahi? / iran navy war / navy action": "Kis date ka naval update chahiye?",
+"iran war me kaun sa ship strike hua? / ship strike war / strike ship": "Kis din ka strike info chahiye?",
+"iran war me kaun sa ship bach gaya? / ship safe war / saved ship": "Kis date ka survival update chahiye?",
+"iran war me kaun sa ship rescue hua? / rescue ship war / ship rescue": "Kis din ka rescue info chahiye?",
   "can you keep a secret": "I don't share your conversations – your privacy matters.","delhi ka weather kaisa hai? / delhi weather kaisa h / delhi ka mosam": "Aapko Delhi ka aaj ka weather chahiye ya kisi specific date ka?",
-  "what is delhi weather? / delhi weather today / weather delhi": "Do you want today's weather or a specific date?",
-  "aaj delhi me barish hogi? / delhi rain aaj / delhi me rain": "Kya aap aaj ka rain update chahte ho ya kisi aur din ka?",
-  "will it rain in delhi today? / rain delhi today / delhi rain": "Do you want today’s update or another date?",
-  "delhi me garmi kitni hai? / delhi heat kitni / garmi delhi": "Aapko kis date ka temperature chahiye?",
-  "how hot is delhi? / delhi temperature / temp delhi": "Which date temperature do you need?",
-  "delhi me thand hai kya? / delhi cold h / thand delhi": "Kis din ka cold check karna hai?",
-  "is delhi cold today? / cold delhi / delhi cold": "Which date info do you need?",
-  "delhi me pollution kitna hai? / delhi pollution / AQI delhi": "Aapko kis date ka AQI chahiye?",
-  "air quality delhi today? / AQI today delhi / pollution today": "Which date AQI do you want?",
-  "delhi me travel safe hai? / delhi safe travel / travel delhi": "Kis date ka safety info chahiye?",
-  "is delhi safe to travel? / travel delhi / safe delhi": "Which date travel info?",
-  "delhi me traffic kaisa hai? / delhi traffic / traffic delhi": "Aapko kis time ya date ka traffic chahiye?",
-  "how is traffic in delhi? / traffic today delhi / delhi traffic": "Which time or date?",
-  "delhi me metro chal rahi hai? / metro delhi / delhi metro": "Aapko current status chahiye ya kisi specific time ka?",
-  "is delhi metro running? / metro status delhi / delhi metro": "Do you want current or specific time info?",
-  "delhi me ghoomne ke liye best jagah? / delhi best place / delhi visit": "Aapko tourist places chahiye ya local spots?",
-  "best places in delhi? / visit delhi / delhi places": "Tourist ya local place info chahiye?",
-  "delhi me khane ke liye kya famous hai? / food delhi / delhi food": "Street food ya restaurants info chahiye?",
-  "what is famous food in delhi? / delhi food / famous food": "Street food or restaurant?",
-  "delhi me job mil sakti hai? / job delhi / work delhi": "Kis field me job chahiye?",
-  "jobs in delhi? / work in delhi / delhi job": "Which field job are you looking for?",
-  "delhi me rent kitna hai? / rent delhi / house rent": "Kis area ka rent chahiye?",
-  "rent in delhi? / house rent delhi / delhi rent": "Which area?",
-  "delhi me school ache hai? / school delhi / delhi school": "Kis type school chahiye?",
-  "schools in delhi? / best school delhi / delhi education": "Which type of school?",
-  "delhi me college ache hai? / college delhi / delhi college": "Kis course ke liye?",
-  "colleges in delhi? / best college delhi / delhi study": "Which course?",
-  "delhi me hospital ache hai? / hospital delhi / delhi hospital": "Kis type hospital chahiye?",
-  "best hospital in delhi? / hospital delhi / delhi health": "Private ya government?",
-  "delhi me shopping kaha kare? / shopping delhi / delhi market": "Budget ya branded?",
-  "shopping in delhi? / delhi market / shop delhi": "Budget ya premium?",
-  "delhi me night life kaisi hai? / night life delhi / delhi night": "Clubs ya casual hangout?",
-  "delhi nightlife? / night in delhi / delhi party": "Clubs ya cafes?",
-  "delhi me safety kaisi hai? / safety delhi / delhi safe": "Kis area ke liye safety chahiye?",
-  "is delhi safe? / safety delhi / delhi safe": "Which area safety?",
-  "delhi me internet speed kaisi hai? / net delhi / internet delhi": "Kis provider ka check karna hai?",
-  "internet in delhi? / net speed delhi / delhi wifi": "Which provider?",
-  "delhi me electricity problem hai? / light delhi / power delhi": "Kis area ka status chahiye?",
-  "power supply delhi? / electricity delhi / delhi power": "Which area?",
-  "delhi me pani ka kya haal hai? / water delhi / delhi pani": "Kis area ka water status chahiye?",
-  "water supply delhi? / pani delhi / delhi water": "Which area?",
-  "delhi me aaj kya event hai? / event delhi / delhi event": "Kis date ka event chahiye?",
-  "events in delhi? / delhi events / today event": "Which date?",
-  "delhi me movie release kya hai? / movie delhi / cinema delhi": "Kis date ya theatre ka info chahiye?",
-  "movies in delhi? / cinema delhi / delhi movie": "Which date or theatre?",
-  "delhi me festival kab hai? / festival delhi / delhi fest": "Kis festival ka info chahiye?",
-  "festival in delhi? / delhi festival / fest delhi": "Which festival?",
-  "delhi me cricket match kab hai? / match delhi / cricket delhi": "Kis date ka match chahiye?",
-  "cricket match in delhi? / delhi match / match today": "Which date?",
-  "delhi me temperature kab badhega? / temp badhega / heat delhi": "Kis date ka forecast chahiye?",
-  "temperature increase delhi? / heat increase / temp rise": "Which date forecast?",
-  "delhi me barish kab hogi? / rain delhi kab / delhi rain": "Kis date ka rain forecast chahiye?",
-  "when will it rain in delhi? / rain delhi / delhi rain": "Which date?",
-  "delhi me thand kab ayegi? / cold delhi kab / winter delhi": "Kis date ka cold forecast chahiye?",
-  "when will cold start in delhi? / cold delhi / winter delhi": "Which date?",
+"what is delhi weather? / delhi weather today / weather delhi": "Do you want today's weather or a specific date?",
+"aaj delhi me barish hogi? / delhi rain aaj / delhi me rain": "Kya aap aaj ka rain update chahte ho ya kisi aur din ka?",
+"will it rain in delhi today? / rain delhi today / delhi rain": "Do you want today’s update or another date?",
+"delhi me garmi kitni hai? / delhi heat kitni / garmi delhi": "Aapko kis date ka temperature chahiye?",
+"how hot is delhi? / delhi temperature / temp delhi": "Which date temperature do you need?",
+"delhi me thand hai kya? / delhi cold h / thand delhi": "Kis din ka cold check karna hai?",
+"is delhi cold today? / cold delhi / delhi cold": "Which date info do you need?",
+"delhi me pollution kitna hai? / delhi pollution / AQI delhi": "Aapko kis date ka AQI chahiye?",
+"air quality delhi today? / AQI today delhi / pollution today": "Which date AQI do you want?",
+"delhi me travel safe hai? / delhi safe travel / travel delhi": "Kis date ka safety info chahiye?",
+"is delhi safe to travel? / travel delhi / safe delhi": "Which date travel info?",
+"delhi me traffic kaisa hai? / delhi traffic / traffic delhi": "Aapko kis time ya date ka traffic chahiye?",
+"how is traffic in delhi? / traffic today delhi / delhi traffic": "Which time or date?",
+"delhi me metro chal rahi hai? / metro delhi / delhi metro": "Aapko current status chahiye ya kisi specific time ka?",
+"is delhi metro running? / metro status delhi / delhi metro": "Do you want current or specific time info?",
+"delhi me ghoomne ke liye best jagah? / delhi best place / delhi visit": "Aapko tourist places chahiye ya local spots?",
+"best places in delhi? / visit delhi / delhi places": "Tourist ya local place info chahiye?",
+"delhi me khane ke liye kya famous hai? / food delhi / delhi food": "Street food ya restaurants info chahiye?",
+"what is famous food in delhi? / delhi food / famous food": "Street food or restaurant?",
+"delhi me job mil sakti hai? / job delhi / work delhi": "Kis field me job chahiye?",
+"jobs in delhi? / work in delhi / delhi job": "Which field job are you looking for?",
+"delhi me rent kitna hai? / rent delhi / house rent": "Kis area ka rent chahiye?",
+"rent in delhi? / house rent delhi / delhi rent": "Which area?",
+"delhi me school ache hai? / school delhi / delhi school": "Kis type school chahiye?",
+"schools in delhi? / best school delhi / delhi education": "Which type of school?",
+"delhi me college ache hai? / college delhi / delhi college": "Kis course ke liye?",
+"colleges in delhi? / best college delhi / delhi study": "Which course?",
+"delhi me hospital ache hai? / hospital delhi / delhi hospital": "Kis type hospital chahiye?",
+"best hospital in delhi? / hospital delhi / delhi health": "Private ya government?",
+"delhi me shopping kaha kare? / shopping delhi / delhi market": "Budget ya branded?",
+"shopping in delhi? / delhi market / shop delhi": "Budget ya premium?",
+"delhi me night life kaisi hai? / night life delhi / delhi night": "Clubs ya casual hangout?",
+"delhi nightlife? / night in delhi / delhi party": "Clubs ya cafes?",
+"delhi me safety kaisi hai? / safety delhi / delhi safe": "Kis area ke liye safety chahiye?",
+"is delhi safe? / safety delhi / delhi safe": "Which area safety?",
+"delhi me internet speed kaisi hai? / net delhi / internet delhi": "Kis provider ka check karna hai?",
+"internet in delhi? / net speed delhi / delhi wifi": "Which provider?",
+"delhi me electricity problem hai? / light delhi / power delhi": "Kis area ka status chahiye?",
+"power supply delhi? / electricity delhi / delhi power": "Which area?",
+"delhi me pani ka kya haal hai? / water delhi / delhi pani": "Kis area ka water status chahiye?",
+"water supply delhi? / pani delhi / delhi water": "Which area?",
+"delhi me aaj kya event hai? / event delhi / delhi event": "Kis date ka event chahiye?",
+"events in delhi? / delhi events / today event": "Which date?",
+"delhi me movie release kya hai? / movie delhi / cinema delhi": "Kis date ya theatre ka info chahiye?",
+"movies in delhi? / cinema delhi / delhi movie": "Which date or theatre?",
+"delhi me festival kab hai? / festival delhi / delhi fest": "Kis festival ka info chahiye?",
+"festival in delhi? / delhi festival / fest delhi": "Which festival?",
+"delhi me cricket match kab hai? / match delhi / cricket delhi": "Kis date ka match chahiye?",
+"cricket match in delhi? / delhi match / match today": "Which date?",
+"delhi me temperature kab badhega? / temp badhega / heat delhi": "Kis date ka forecast chahiye?",
+"temperature increase delhi? / heat increase / temp rise": "Which date forecast?",
+"delhi me barish kab hogi? / rain delhi kab / delhi rain": "Kis date ka rain forecast chahiye?",
+"when will it rain in delhi? / rain delhi / delhi rain": "Which date?",
+"delhi me thand kab ayegi? / cold delhi kab / winter delhi": "Kis date ka cold forecast chahiye?",
+"when will cold start in delhi? / cold delhi / winter delhi": "Which date?",
   "do you remember me": "I remember our conversation during this session. In future sessions, I start fresh (unless you log in).",
   "do you have memory": "I have session memory – I remember what we talked about during this visit.",
   "can you learn": "I learn from data, but I don't learn from individual conversations unless designed to.",
@@ -2547,7 +3284,7 @@ const conversationalData = {
 
 console.log(`📚 Loaded ${Object.keys(conversationalData).length} conversational Q&A pairs`);
 
-// ========== LOCAL RESPONSE (with tense support) ==========
+// ========== LOCAL RESPONSE (with tense support + 100+ human patterns) ==========
 function cleanInput(text) {
   const typoMap = {
     mje: "mujhe",
@@ -2575,9 +3312,11 @@ function getLocalResponse(question, tense = "present") {
   const lang = detectLanguage(question);
   const hi = lang === "hi";
 
-  // --- Real-time India info ---
+  // --- Real-time India info (fixed) ---
   if (
-    /(india(?:'s)? (time|current time|real time)|ist time|bharat ka samay|current time in india|what is the time in india|real time india)/i.test(q)
+    /(india(?:'s)? (time|current time|real time)|ist time|bharat ka samay|current time in india|what is the time in india|real time india)/i.test(
+      q
+    )
   ) {
     const { formatted, timezone } = getIndiaRealTime();
     if (hi) {
@@ -2587,7 +3326,7 @@ function getLocalResponse(question, tense = "present") {
     }
   }
 
-  // --- Who built you? ---
+  // --- Who built you? (all variations) ---
   const whoBuiltPattern = /(who (made|created|built) you|tumko kisne banaya|kisne banaya|kon (bnaya|banaya) hai tumko|kon bnaya|kon banaya|kaun banaya|kaun bnaya)/i;
   if (whoBuiltPattern.test(q)) {
     return hi
@@ -2595,12 +3334,12 @@ function getLocalResponse(question, tense = "present") {
       : "I was created by **R@njit**, a brilliant developer! 😊";
   }
 
-  // --- Check conversational dataset ---
+  // --- NEW: Check conversational dataset (exact match after cleaning) ---
   if (conversationalData[q]) {
     return conversationalData[q];
   }
 
-  // --- Greetings & basic chit-chat ---
+  // --- Greetings & basic chit-chat (fallback if not in dataset) ---
   if (/^(hi|hello|hey|namaste|hlo|hii|hola|sup|yo)\b/i.test(q)) {
     if (tense === "past") return hi ? "नमस्ते! आपने पहले भी नमस्ते कहा था।" : "Hello! You greeted me before.";
     if (tense === "future") return hi ? "नमस्ते! आगे भी मैं यहीं हूँ।" : "Hello! I'll be here in the future too.";
@@ -2708,7 +3447,12 @@ function getLocalResponse(question, tense = "present") {
   return null;
 }
 
-// ========== SMART AI ENGINE (Gemini) ==========
+// ========== SMART AI ENGINE (ChatGPT / DeepSeek / Perplexity style) ==========
+// Added as a NEW layer — does NOT touch or remove any existing code above.
+// This function is called AFTER local response fails and BEFORE Tavily search.
+// It uses Gemini as the brain with a powerful system prompt that gives
+// long, intelligent, human-like answers like ChatGPT in any language.
+
 const VOICE_ASSISTANT_SYSTEM_PROMPT = `
 You are RanAI, a real-time voice assistant.
 
@@ -2734,7 +3478,7 @@ UNDERSTANDING RULE
 - Focus on intent
 
 ========================
-VOICE OUTPUT MODE
+VOICE OUTPUT MODE (VERY IMPORTANT)
 ========================
 Always assume your response will be spoken aloud.
 
@@ -2793,7 +3537,13 @@ Understand messy voice input and respond in a way that sounds natural when spoke
 async function buildSmartReply(question, conversationHistory, detectedLang, memoryObj) {
   if (!model) return null;
   try {
-    const ctxBlock = memoryObj ? buildContextBlock(memoryObj) : "";
+    // Full context block from session memory
+    const ctxBlock = memoryObj ? buildContextBlock(memoryObj) : (() => {
+      if (!conversationHistory || !conversationHistory.length) return "";
+      return "\n\nConversation so far:\n" +
+        conversationHistory.map(m => `${m.role === "user" ? "User" : "RanAI"}: ${m.content}`).join("\n");
+    })();
+
     const contextSection = ctxBlock ? `\n\n[Memory & Context]:\n${ctxBlock}\n\n` : "";
     const fullPrompt = `${VOICE_ASSISTANT_SYSTEM_PROMPT}${contextSection}User: ${question}\n\nRanAI:`;
 
@@ -2807,12 +3557,16 @@ async function buildSmartReply(question, conversationHistory, detectedLang, memo
   }
 }
 
-// ========== CHATGPT BRAIN ==========
+// ========== CHATGPT BRAIN (OpenAI GPT-4o — Real ChatGPT level answers) ==========
+// Ye function ChatGPT API ko call karta hai. Har language me user jaise bole,
+// waise hi jawab deta hai. Ye Gemini se pehle try hoga — primary brain hai.
+
 const CHATGPT_SYSTEM_PROMPT = VOICE_ASSISTANT_SYSTEM_PROMPT;
 
 async function buildChatGPTReply(question, conversationHistory, memoryObj) {
   if (!OPENAI_API_KEY || OPENAI_API_KEY === "YOUR_OPENAI_API_KEY_HERE") return null;
   try {
+    // Build context block from full session memory (summary + topics + recent)
     const ctxBlock = memoryObj ? buildContextBlock(memoryObj) : "";
     const systemWithContext = ctxBlock
       ? CHATGPT_SYSTEM_PROMPT + "\n\n[User Memory & Context]:\n" + ctxBlock
@@ -2820,6 +3574,7 @@ async function buildChatGPTReply(question, conversationHistory, memoryObj) {
 
     const messages = [{ role: "system", content: systemWithContext }];
 
+    // Add recent turns so ChatGPT sees alternating user/assistant pairs
     if (conversationHistory && conversationHistory.length > 0) {
       for (const msg of conversationHistory) {
         messages.push({
@@ -2857,7 +3612,7 @@ async function buildChatGPTReply(question, conversationHistory, memoryObj) {
     }
     return null;
   } catch (err) {
-    // Fallback to GPT-3.5
+    // GPT-4o fail ho to GPT-3.5-turbo fallback try karo
     if (err.response?.status === 429 || err.response?.data?.error?.code === "model_not_found") {
       try {
         const messages2 = [{ role: "system", content: CHATGPT_SYSTEM_PROMPT }];
@@ -2890,20 +3645,21 @@ async function buildChatGPTReply(question, conversationHistory, memoryObj) {
   }
 }
 
-// ========== /ask ENDPOINT ==========
+// ========== /ask ENDPOINT (with per-user memory, name detection, tense, 10-point answers) ==========
 app.post("/ask", async (req, res) => {
   const { question, lang, history: clientHistory } = req.body;
   if (!question || !question.trim()) {
     return res.json({ success: false, reply: "कृपया कुछ पूछें!" });
   }
 
+  // ── STEP 1: Load THIS user's isolated memory from their session ──
   const userMemory = loadMemory(req);
 
-  // Name detection
+  // ── STEP 2: Detect and store user's name (per-user, never shared) ──
   const detectedName = extractName(question);
   if (detectedName) {
     userMemory.name = detectedName;
-    req.session.userMemory = userMemory;
+    req.session.userMemory = userMemory; // Persist name to this user's session
     console.log(`📝 Name saved for session: "${detectedName}"`);
     const nameLang = detectLanguage(question);
     const nameReply = nameLang === "hi"
@@ -2914,7 +3670,7 @@ app.post("/ask", async (req, res) => {
     return res.json({ success: true, reply: nameReply });
   }
 
-  // "What is my name?"
+  // ── STEP 3: Handle "what is my name" queries using per-user stored name ──
   if (/\b(mera naam kya|mera name|what('?s| is) my name|my name kya|aap mujhe kya kehte)\b/i.test(question)) {
     const storedName = userMemory.name;
     const nameLang = detectLanguage(question);
@@ -2930,8 +3686,11 @@ app.post("/ask", async (req, res) => {
     return res.json({ success: true, reply: nameAnswer });
   }
 
-  // Merge client history into session
+  // ── STEP 4: Build conversation history from THIS user's session memory ──
+  // Always use session memory as source of truth.
+  // If client also sends history, merge new items into session.
   if (clientHistory && Array.isArray(clientHistory) && clientHistory.length > 0) {
+    // Merge: add client messages that are not already saved
     const saved = new Set(userMemory.messages.map(m => m.content));
     for (const m of clientHistory.slice(-RECENT_CONTEXT)) {
       if (!saved.has(m.content || "")) {
@@ -2947,16 +3706,22 @@ app.post("/ask", async (req, res) => {
     }
     req.session.userMemory = userMemory;
   }
+  // Always derive conversationHistory from session (persistent)
   const conversationHistory = userMemory.messages.slice(-RECENT_CONTEXT);
 
+  // ── STEP 4.5: Track topics ──
   saveTopics(req, question);
 
   const detectedLang = lang || detectLanguage(question);
   const tense = detectTense(question);
-  const userName = userMemory.name || null;
-  const nameContext = userName ? `\nThe user's name is ${userName}. Address them by name occasionally to feel personal.\n` : "";
 
-  // 1. Local response
+  // ── STEP 5: Personalize system prompt with this user's name ──
+  const userName = userMemory.name || null;
+  const nameContext = userName
+    ? `\nThe user's name is ${userName}. Address them by name occasionally to feel personal.\n`
+    : "";
+
+  // 1. Try local response (includes conversational dataset, real-time India, math, tables, etc.)
   const localReply = getLocalResponse(question, tense);
   if (localReply) {
     saveMessage(req, "user", question);
@@ -2964,12 +3729,16 @@ app.post("/ask", async (req, res) => {
     return res.json({ success: true, reply: localReply });
   }
 
-  // 2. Pollinations Text API (FREE, no key)
+  // 1.5 🌸 Pollinations Text API (PRIMARY — Free, No API Key, Long Detailed Answers)
+  // Conversation history bhi bhejte hain taaki Pollinations bhi pichli baatein yaad rakhe.
   try {
     const langInstruction = detectedLang === "hi"
       ? "Reply only in Hindi or Hinglish, exactly the way the user speaks."
       : "Reply in the same language and style as the user.";
+
+    // Build full context block from session memory (includes summary + recent)
     const contextBlock = buildContextBlock(userMemory);
+
     const fullPrompt = `${VOICE_ASSISTANT_SYSTEM_PROMPT}${nameContext}\n${langInstruction}\n\n[Memory & Context]:\n${contextBlock}\n\nUser question: ${question}`;
     const polRes = await axios.get(
       `https://text.pollinations.ai/${encodeURIComponent(fullPrompt)}`,
@@ -2983,10 +3752,10 @@ app.post("/ask", async (req, res) => {
       return res.json({ success: true, reply: polAnswer });
     }
   } catch (polErr) {
-    console.warn("⚠️ Pollinations Text failed:", polErr.message);
+    console.warn("⚠️ Pollinations Text failed:", polErr.message, "— trying ChatGPT…");
   }
 
-  // 3. ChatGPT (GPT-4o / GPT-3.5 fallback)
+  // 1.6 🧠 ChatGPT Brain (FALLBACK — GPT-4o by OpenAI)
   const chatgptReply = await buildChatGPTReply(question, conversationHistory, userMemory);
   if (chatgptReply) {
     saveMessage(req, "user", question);
@@ -2994,7 +3763,9 @@ app.post("/ask", async (req, res) => {
     return res.json({ success: true, reply: chatgptReply });
   }
 
-  // 4. Gemini smart reply
+  // 1.6 Smart AI Engine — Gemini fallback (if ChatGPT key not set or fails)
+  // Uses Gemini with a powerful system prompt for long, detailed, multilingual answers.
+  // Runs only if ChatGPT is unavailable. Falls through to Tavily if Gemini also fails.
   const smartReply = await buildSmartReply(question, conversationHistory, detectedLang, userMemory);
   if (smartReply) {
     saveMessage(req, "user", question);
@@ -3002,7 +3773,7 @@ app.post("/ask", async (req, res) => {
     return res.json({ success: true, reply: smartReply });
   }
 
-  // 5. Tavily search (internet)
+  // 2. Prepare search query for 10-point answer (if internet needed)
   let searchQuery = question;
   if (detectedLang === "hi") {
     searchQuery = `${question} (उत्तर हिंदी में 10 बिंदुओं में दें)`;
@@ -3011,6 +3782,7 @@ app.post("/ask", async (req, res) => {
   }
 
   try {
+    // Use Tavily with 10-point instruction
     const response = await tvly.search(searchQuery, {
       searchDepth: "advanced",
       maxResults: 10,
@@ -3019,7 +3791,9 @@ app.post("/ask", async (req, res) => {
 
     let reply = (response.answer || "").trim();
 
+    // If Tavily gave an answer, it may already be in points. If not, format it.
     if (reply && !reply.match(/^\d+\./m)) {
+      // Convert to 10 points using a simple split or ask Gemini
       if (model) {
         try {
           const formatPrompt = detectedLang === "hi"
@@ -3029,6 +3803,7 @@ app.post("/ask", async (req, res) => {
           reply = geminiFormat.response.text();
         } catch (err) {
           console.warn("Gemini formatting failed, using fallback");
+          // Fallback: split by sentences, take first 10
           const sentences = reply.split(/[.!?]+/).filter(s => s.trim().length > 10);
           const points = sentences.slice(0, 10).map((s, i) => `${i+1}. ${s.trim()}.`);
           reply = points.join("\n");
@@ -3037,6 +3812,7 @@ app.post("/ask", async (req, res) => {
     }
 
     if (!reply && response.results && response.results.length > 0) {
+      // Build 10 points from search results
       const allContent = response.results.slice(0, 10).map(r => r.content.substring(0, 300)).join(" ");
       const sentences = allContent.split(/[.!?]+/).filter(s => s.trim().length > 20);
       const points = sentences.slice(0, 10).map((s, i) => `${i+1}. ${s.trim()}.`);
@@ -3049,19 +3825,25 @@ app.post("/ask", async (req, res) => {
         : "Sorry, I couldn't find a 10-point answer. Please try rephrasing.";
     }
 
+    // Update this user's per-session memory (isolated per user)
     saveMessage(req, "user", question);
     saveMessage(req, "assistant", reply);
     return res.json({ success: true, reply });
   } catch (tavilyErr) {
     console.error("Tavily error:", tavilyErr.message);
 
+    // Fallback to Gemini with conversation history and tense instruction
     if (model) {
       try {
         const langInstruction = detectedLang === "hi"
           ? "हिंदी या Hinglish में उत्तर दें — जैसा user ने लिखा है वैसा ही।"
+          : detectedLang === "bn" ? "Reply in Bengali."
+          : detectedLang === "ta" ? "Reply in Tamil."
+          : detectedLang === "te" ? "Reply in Telugu."
           : "Answer in English.";
         const tenseInstruction = `The user's question is in ${tense} tense. Please respond in the same tense (${tense}) as the user.`;
         const ranaiPersona = VOICE_ASSISTANT_SYSTEM_PROMPT.trim();
+        // Use full memory context in fallback too
         const fullCtx = buildContextBlock(userMemory);
         const prompt = `${ranaiPersona}${nameContext}\n\n${langInstruction} ${tenseInstruction}\n\n[Memory]:\n${fullCtx}\n\nUser: ${question}`;
         const result = await model.generateContent(prompt);
@@ -3082,15 +3864,18 @@ app.post("/ask", async (req, res) => {
   }
 });
 
-// ========== VOICE-TO-TEXT ==========
+// ========== VOICE-TO-TEXT (OpenAI Whisper + Gemini Fallback) ==========
+// Accepts audio blob (webm/ogg/mp4/wav) and returns transcript.
+// Pehle Whisper try karta hai, agar fail ho to Gemini Audio se fallback karta hai.
 const audioUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 },
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB max (Whisper limit)
 });
 
 app.post('/voice-to-text', audioUpload.single('audio'), async (req, res) => {
   if (!req.file) return res.status(400).json({ success: false, error: 'No audio file received' });
 
+  // ── Path 1: OpenAI Whisper (best quality, Hindi + English) ──
   if (OPENAI_API_KEY && OPENAI_API_KEY !== 'YOUR_OPENAI_API_KEY_HERE') {
     try {
       const formData = new FormData();
@@ -3104,7 +3889,7 @@ app.post('/voice-to-text', audioUpload.single('audio'), async (req, res) => {
         knownLength: req.file.buffer.length,
       });
       formData.append('model', 'whisper-1');
-      formData.append('language', 'hi');
+      formData.append('language', 'hi'); // Hindi + English mixed
 
       const response = await axios.post('https://api.openai.com/v1/audio/transcriptions', formData, {
         headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...formData.getHeaders() },
@@ -3116,12 +3901,13 @@ app.post('/voice-to-text', audioUpload.single('audio'), async (req, res) => {
         return res.json({ success: true, transcript, source: 'whisper' });
       }
     } catch (whisperErr) {
-      console.warn('⚠️ Whisper failed, trying Gemini STT fallback:', whisperErr.message);
+      console.warn('⚠️ Whisper failed, trying Gemini STT fallback:', whisperErr.response?.data?.error?.message || whisperErr.message);
     }
   } else {
     console.warn('⚠️ OpenAI key not set — using Gemini STT fallback directly');
   }
 
+  // ── Path 2: Gemini Audio Transcription Fallback ──
   if (model) {
     try {
       const base64Audio = req.file.buffer.toString('base64');
@@ -3147,28 +3933,34 @@ app.post('/voice-to-text', audioUpload.single('audio'), async (req, res) => {
     }
   }
 
+  // ── Path 3: Both failed — tell frontend to use browser Web Speech API ──
+  console.error('❌ All STT methods failed. Telling client to use browser STT.');
   return res.status(503).json({
     success: false,
     error: 'Server STT unavailable',
-    useBrowserSTT: true,
+    useBrowserSTT: true, // Frontend is flag se browser ka Web Speech API use karega
   });
 });
 
-// ========== TTS ==========
+// ========== TEXT-TO-SPEECH / TTS (Hindi Voice Output) ==========
+// POST /tts  { text: "..." }
+// Returns audio/mpeg stream — browser seedha play kar sakta hai.
+// Google Translate TTS use karta hai — free, no API key, Hindi support.
 app.post('/tts', async (req, res) => {
   const { text, lang } = req.body;
   if (!text || !text.trim()) {
     return res.status(400).json({ success: false, error: 'Text required' });
   }
 
+  // Text ko 200 char ke chunks me todta hai (Google TTS limit)
   const cleanText = text
-    .replace(/\*\*/g, '')
+    .replace(/\*\*/g, '')   // markdown bold hatao
     .replace(/\*/g, '')
-    .replace(/#+\s/g, '')
-    .replace(/\n+/g, ' ')
+    .replace(/#+\s/g, '')    // headings hatao
+    .replace(/\n+/g, ' ')   // newlines ko space
     .trim();
 
-  const ttsLang = lang || 'hi';
+  const ttsLang = lang || 'hi'; // default Hindi
   const chunks = [];
   for (let i = 0; i < cleanText.length; i += 200) {
     chunks.push(cleanText.slice(i, i + 200));
@@ -3196,20 +3988,21 @@ app.post('/tts', async (req, res) => {
       'Content-Length': combined.length,
       'Cache-Control': 'no-cache',
     });
-    console.log(`✅ TTS generated (${ttsLang})`);
+    console.log(`✅ TTS generated (${ttsLang}): "${cleanText.slice(0, 60)}..."`);
     return res.send(combined);
   } catch (ttsErr) {
     console.error('❌ Google TTS error:', ttsErr.message);
+    // Fallback: browser ko bolo Web Speech API use kare
     return res.status(503).json({
       success: false,
       error: 'TTS server unavailable',
       useBrowserTTS: true,
-      text: cleanText,
+      text: cleanText, // browser ko text bhejte hain taaki woh khud bole
     });
   }
 });
 
-// ========== POLLINATIONS IMAGE GENERATION ==========
+// ADDED CODE START — Pollinations Image Generation Endpoint
 app.post("/generate-image", async (req, res) => {
   const { prompt } = req.body;
   if (!prompt || !prompt.trim()) {
@@ -3218,6 +4011,7 @@ app.post("/generate-image", async (req, res) => {
   const encoded = encodeURIComponent(prompt.trim());
   const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?nologo=true&width=768&height=512&seed=${Date.now()}`;
   try {
+    // Verify image is reachable
     await axios.head(imageUrl, { timeout: 8000 });
     console.log("✅ Pollinations image generated:", imageUrl);
     return res.json({ success: true, imageUrl });
@@ -3226,8 +4020,9 @@ app.post("/generate-image", async (req, res) => {
     return res.status(500).json({ success: false, error: "Image generation failed" });
   }
 });
+// ADDED CODE END — Pollinations Image Generation Endpoint
 
-// ========== IMAGE ANALYSIS ==========
+// ========== IMAGE ANALYSIS (unchanged, works with Gemini Vision) ==========
 async function getImageCaptionDeepAI(imageBuffer, mimeType) {
   const endpoints = [
     "https://api.deepai.org/api/image-recognition",
@@ -3315,9 +4110,21 @@ app.post("/analyze", upload.single("image"), async (req, res) => {
   }
 });
 
-// ========== /image-chat — Vision AI ==========
+// ═══════════════════════════════════════════════════════════════════════
+// 📷 /image-chat — Vision AI: Image + Question → Always gives an answer
+// Route: POST /image-chat  (multipart/form-data)
+// Fields: image (file), query (optional text), lang (optional)
+// RULES:
+//   - ALWAYS analyze if image is present — NEVER say "cannot see image"
+//   - If no query → auto-describe the image in detail
+//   - If query → analyze image first, then answer question based on it
+//   - Primary: Gemini 1.5 Flash Vision
+//   - Fallback: DeepAI caption + Gemini text answer
+//   - Last resort: Helpful error, never a blank or rude response
+// ═══════════════════════════════════════════════════════════════════════
 app.post("/image-chat", upload.single("image"), async (req, res) => {
   try {
+    // ── Guard: image must be present ──────────────────────────────────
     if (!req.file) {
       return res.status(400).json({
         success: false,
@@ -3331,12 +4138,16 @@ app.post("/image-chat", upload.single("image"), async (req, res) => {
     const lang        = (req.body.lang   || "en").trim();
     const isHindi     = lang === "hi" || /[\u0900-\u097F]/.test(userQuery);
 
+    // ── STEP 1 (PRIMARY): Gemini 1.5 Flash Vision ────────────────────
     if (model) {
       try {
         const base64Image = imageBuffer.toString("base64");
+
+        // Build a smart prompt that forces a real answer — no refusals
         const systemNote = isHindi
           ? "Tum RanAI ho, ek helpful vision AI assistant. User ne tumhein ek image bheji hai. Image ko carefully analyze karo aur clearly jawab do. Hindi ya Hinglish mein bolो."
           : "You are RanAI, a helpful vision AI assistant. The user has sent you an image. Carefully analyze it and give a clear, friendly, detailed answer in English.";
+
         const taskPrompt = userQuery
           ? (isHindi
               ? `User ka sawaal hai: "${userQuery}"\n\nImage ko dhyan se dekho aur is sawaal ka jawab do. Agar image mein text hai toh use bhi batao.`
@@ -3344,6 +4155,7 @@ app.post("/image-chat", upload.single("image"), async (req, res) => {
           : (isHindi
               ? "Is image mein kya hai? Sab kuch detail mein batao — main subject, rang, text agar ho, context, aur koi bhi interesting cheez."
               : "Describe everything in this image in detail — the main subject, colors, any text visible, background, context, and anything interesting or notable.");
+
         const fullPrompt = `${systemNote}\n\n${taskPrompt}`;
 
         const result = await model.generateContent([
@@ -3361,6 +4173,7 @@ app.post("/image-chat", upload.single("image"), async (req, res) => {
       }
     }
 
+    // ── STEP 2 (FALLBACK): DeepAI caption → Gemini text answer ───────
     let captionDescription = null;
     try {
       const deepForm = new FormData();
@@ -3385,6 +4198,7 @@ app.post("/image-chat", upload.single("image"), async (req, res) => {
       console.warn("⚠️ /image-chat DeepAI failed:", deepErr.message);
     }
 
+    // If we got DeepAI captions, use Gemini to produce a nice answer
     if (captionDescription && model) {
       try {
         const fallbackPrompt = userQuery
@@ -3401,6 +4215,7 @@ app.post("/image-chat", upload.single("image"), async (req, res) => {
       }
     }
 
+    // If only captions, return them directly
     if (captionDescription) {
       const directAnswer = userQuery
         ? `Based on the image (${captionDescription}): ${userQuery}`
@@ -3408,6 +4223,7 @@ app.post("/image-chat", upload.single("image"), async (req, res) => {
       return res.json({ success: true, answer: directAnswer, source: "deepai" });
     }
 
+    // ── STEP 3 (LAST RESORT): Honest fallback ────────────────────────
     const lastResort = isHindi
       ? "Image mil gayi, lekin abhi analyze karne mein problem aa rahi hai. Thoda baad try karo ya image phir se bhejo."
       : "Image received but analysis failed temporarily. Please try again or send a clearer image.";
@@ -3422,13 +4238,15 @@ app.post("/image-chat", upload.single("image"), async (req, res) => {
   }
 });
 
-// ========== WEATHER ==========
+// ========== 🌦️ LIVE WEATHER (Free, Fast) ==========
+// GET /weather?city=CityName
 app.get("/weather", async (req, res) => {
   const city = req.query.city;
   if (!city || !city.trim()) {
     return res.status(400).json({ error: "City name required. Example: /weather?city=Mumbai" });
   }
   try {
+    // Using wttr.in – no API key, returns JSON, fast (<2 sec)
     const url = `https://wttr.in/${encodeURIComponent(city.trim())}?format=j1`;
     const response = await axios.get(url, { timeout: 8000 });
     const data = response.data;
@@ -3472,7 +4290,8 @@ app.get("/weather", async (req, res) => {
   }
 });
 
-// ========== TIME ==========
+// ========== 🕒 INDIA TIME & DATE (Enhanced) ==========
+// GET /time – returns current IST date, time, timezone, timestamp
 app.get("/time", (req, res) => {
   const { formatted, timezone } = getIndiaRealTime();
   const now = new Date();
@@ -3490,8 +4309,7 @@ app.get("/time", (req, res) => {
     iso: now.toISOString()
   });
 });
-
-// ========== WEATHER-LIVE (any location) ==========
+// ========== 🌦️ NEW: LIVE WEATHER FOR ANY INDIAN LOCATION (village/district/state) ==========
 app.get("/weather-live", async (req, res) => {
   let { location, state, lang } = req.query;
   if (!location || !location.trim()) {
@@ -3529,7 +4347,7 @@ app.get("/weather-live", async (req, res) => {
   }
 });
 
-// ========== TIME-INDIA ==========
+// ========== 🕒 NEW: ENHANCED INDIA TIME ==========
 app.get("/time-india", (req, res) => {
   const { location } = req.query;
   const now = new Date();
@@ -3544,7 +4362,7 @@ app.get("/time-india", (req, res) => {
   res.json({ success: true, reply, fullTime: formatted, time12hr, date: dateStr, day });
 });
 
-// ========== JOB FINDER ==========
+// ========== 💼 JOB FINDER ==========
 const JOB_SYSTEM_PROMPT = `You are a Real-Time AI Job Finder for RanAI (India-based platform).
 Return ONLY valid JSON — no markdown, no explanation, no extra text.
 
@@ -3585,6 +4403,7 @@ Skills: ${Array.isArray(skills) ? skills.join(", ") : skills}
 Experience: ${experience} years
 Language: ${lang}`;
 
+    // Try Gemini
     if (model) {
       try {
         const result = await model.generateContent([{ text: JOB_SYSTEM_PROMPT + "\n\n" + userPrompt }]);
@@ -3594,6 +4413,7 @@ Language: ${lang}`;
       } catch (e) { console.error("Gemini jobs error:", e.message); }
     }
 
+    // Fallback static
     const expNum = parseInt(experience, 10) || 0;
     const salary = expNum === 0 ? "₹10,000 – ₹22,000" : expNum <= 2 ? "₹20,000 – ₹45,000" : expNum <= 5 ? "₹45,000 – ₹85,000" : "₹80,000 – ₹1,50,000";
     const isHi = lang === "hi";
@@ -3623,7 +4443,8 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "../client/index.html"));
 });
 
-// ========== MEMORY STATS ==========
+// ========== 📊 MEMORY STATS ENDPOINT ==========
+// Returns current user's memory stats — useful for debugging / UI badge.
 app.get("/memory-stats", (req, res) => {
   try {
     const memory = loadMemory(req);
@@ -3643,7 +4464,9 @@ app.get("/memory-stats", (req, res) => {
   }
 });
 
-// ========== CLEAR MEMORY ==========
+// ========== 🧹 CLEAR MEMORY ENDPOINT ==========
+// Clears only the current user's session memory (name + chat history).
+// Other users are completely unaffected.
 app.post("/clear-memory", (req, res) => {
   try {
     clearMemory(req);
@@ -3654,7 +4477,11 @@ app.post("/clear-memory", (req, res) => {
   }
 });
 
-// ========== NEARBY JOB FINDER ==========
+// ========== 📍 NEARBY JOB FINDER (Location-based, under 10km, with website links) ==========
+// POST /jobs-nearby
+// Body: { role, lat, lon, skills, experience, lang, radius }
+// Uses Tavily to search real live job listings near user's coordinates.
+// Returns jobs with: title, company, location, distance_km, salary, applyUrl, source_site, map_link
 const NEARBY_JOB_SYSTEM_PROMPT = `You are a hyper-local Real-Time Job Finder for India.
 The user is searching for jobs near their GPS coordinates.
 Return ONLY valid JSON — no markdown, no explanation, no extra text.
@@ -3707,6 +4534,7 @@ app.post("/jobs-nearby", async (req, res) => {
       return res.status(400).json({ success: false, error: "Job role is required" });
     }
 
+    // ── Step 1: Reverse geocode coordinates to city/area name ──
     let cityArea = "Delhi";
     let googleMapsBase = "https://www.google.com/maps/search/";
 
@@ -3728,6 +4556,7 @@ app.post("/jobs-nearby", async (req, res) => {
       }
     }
 
+    // ── Step 2: Tavily live search for real nearby jobs ──
     let tavilyContext = "";
     try {
       const skillStr = Array.isArray(skills) && skills.length ? skills.join(", ") : "";
@@ -3747,6 +4576,7 @@ app.post("/jobs-nearby", async (req, res) => {
       console.warn("Tavily nearby jobs search failed:", tavErr.message);
     }
 
+    // ── Step 3: Build AI prompt ──
     const isHi = lang === "hi";
     const userPrompt = `Find nearby jobs:
 Role: ${role}
@@ -3760,6 +4590,7 @@ ${tavilyContext ? `Live job search results found online:\n${tavilyContext}` : "N
 
 Important: applyUrl must be a real working link. Use the URLs from search results above when available.`;
 
+    // ── Step 4: Try Gemini ──
     if (model) {
       try {
         const result = await model.generateContent([
@@ -3777,6 +4608,7 @@ Important: applyUrl must be a real working link. Use the URLs from search result
       }
     }
 
+    // ── Step 5: Static fallback ──
     const expNum = parseInt(experience, 10) || 0;
     const salaryFallback =
       expNum === 0 ? "₹10,000 – ₹22,000/month"
@@ -3832,7 +4664,11 @@ Important: applyUrl must be a real working link. Use the URLs from search result
   }
 });
 
-// ========== SARKARI JOBS FINDER ==========
+// ========== 🏛️ SARKARI (GOVERNMENT) JOBS FINDER — Real-time via Tavily ==========
+// POST /sarkari-jobs
+// Body: { category, state, qualification, lang }
+// Fetches live sarkari job listings from sarkariresult.com, rojgarresult.com, govt portals
+
 const SARKARI_JOB_SYSTEM_PROMPT = `You are a Real-Time Sarkari (Government) Job Finder for India.
 You search and return current government job notifications from SSC, UPSC, Railway, Banking, Police, Army, State PSC, Teaching, Defence and other sarkari sectors.
 
@@ -3883,6 +4719,7 @@ app.post("/sarkari-jobs", async (req, res) => {
 
     const isHi = lang === "hi";
 
+    // ── Step 1: Tavily live search for real sarkari jobs ──
     let tavilyContext = "";
     try {
       const stateFilter = state && state !== "all" ? ` ${state}` : " India";
@@ -3921,6 +4758,7 @@ app.post("/sarkari-jobs", async (req, res) => {
       console.warn("Tavily sarkari jobs search failed:", tavErr.message);
     }
 
+    // ── Step 2: Build AI prompt ──
     const userPrompt = `Find current Sarkari (Government) Jobs:
 Category: ${category}
 State/Region: ${state}
@@ -3938,6 +4776,7 @@ Important:
 - Include variety: SSC, Railway, Banking, Police, Teaching, State PSC
 - lastDate should be upcoming (May-August 2025)`;
 
+    // ── Step 3: Try Gemini ──
     if (model) {
       try {
         const result = await model.generateContent([
@@ -3955,6 +4794,7 @@ Important:
       }
     }
 
+    // ── Step 4: ChatGPT fallback ──
     if (OPENAI_API_KEY && OPENAI_API_KEY !== "YOUR_OPENAI_API_KEY_HERE") {
       try {
         const response = await axios.post(
@@ -3987,6 +4827,7 @@ Important:
       }
     }
 
+    // ── Step 5: Static fallback with real portal links ──
     const fallbackJobs = [
       {
         title: "SSC CGL 2025",
@@ -4088,6 +4929,7 @@ Important:
       }
     ];
 
+    // Filter by category if specified
     let filteredJobs = fallbackJobs;
     if (category && category !== "all") {
       const catLower = category.toLowerCase();
@@ -4122,14 +4964,21 @@ Important:
   }
 });
 
-// ========== NEW FEATURES ==========
 
-// 1. ADVANCED CALCULATOR
+// ╔══════════════════════════════════════════════════════════════════════╗
+// ║              NEW FEATURES — ADDED SAFELY, NO EXISTING CODE TOUCHED  ║
+// ╚══════════════════════════════════════════════════════════════════════╝
+
+// ══════════════════════════════════════════════
+// 🧮 1. ADVANCED CALCULATOR
+// POST /calculator  { expr: "2+2", history: [] }
+// ══════════════════════════════════════════════
 app.post("/calculator", async (req, res) => {
   try {
     const { expr = "", history = [] } = req.body;
     if (!expr.trim()) return res.status(400).json({ success: false, error: "Expression required" });
 
+    // Safe eval with mathjs-style replacements
     let expression = expr
       .replace(/×/g, "*").replace(/÷/g, "/").replace(/\^/g, "**")
       .replace(/\bpi\b/gi, "Math.PI").replace(/\be\b/g, "Math.E")
@@ -4140,7 +4989,7 @@ app.post("/calculator", async (req, res) => {
       .replace(/\bfloor\(/gi, "Math.floor(").replace(/\bceil\(/gi, "Math.ceil(")
       .replace(/\bround\(/gi, "Math.round(").replace(/\bpow\(/gi, "Math.pow(")
       .replace(/\bmax\(/gi, "Math.max(").replace(/\bmin\(/gi, "Math.min(")
-      .replace(/(\d)([a-zA-Z])/g, "$1*$2")
+      .replace(/(\d)([a-zA-Z])/g, "$1*$2")  // 2pi → 2*pi
       .replace(/\bmod\b/gi, "%")
       .replace(/,/g, "").trim();
 
@@ -4153,6 +5002,7 @@ app.post("/calculator", async (req, res) => {
 
     const formatted = parseFloat(result.toFixed(10)).toString();
 
+    // AI-powered explanation via Gemini
     let explanation = null;
     if (model) {
       try {
@@ -4170,7 +5020,10 @@ app.post("/calculator", async (req, res) => {
   }
 });
 
-// 2. LIVE NEWS FEED
+// ══════════════════════════════════════════════
+// 📰 2. LIVE NEWS FEED
+// GET /news?category=tech&lang=en&country=in
+// ══════════════════════════════════════════════
 app.get("/news", async (req, res) => {
   try {
     const { category = "general", lang = "en", country = "in", q = "" } = req.query;
@@ -4211,7 +5064,10 @@ app.get("/news", async (req, res) => {
   }
 });
 
-// 3. WEBSITE SUMMARIZER
+// ══════════════════════════════════════════════
+// 🌐 3. WEBSITE SUMMARIZER
+// POST /summarize-url  { url: "https://...", lang: "en" }
+// ══════════════════════════════════════════════
 app.post("/summarize-url", async (req, res) => {
   try {
     const { url = "", lang = "en" } = req.body;
@@ -4220,6 +5076,7 @@ app.post("/summarize-url", async (req, res) => {
 
     const isHi = lang === "hi";
 
+    // Fetch page content via Tavily extract
     let pageContent = "";
     try {
       const tavilyRes = await tvly.search(`site content summary: ${url}`, {
@@ -4229,6 +5086,7 @@ app.post("/summarize-url", async (req, res) => {
     } catch (_) {}
 
     if (!pageContent) {
+      // Direct fetch fallback
       try {
         const fetchRes = await axios.get(url, { timeout: 8000,
           headers: { "User-Agent": "Mozilla/5.0 RanAI-Summarizer/1.0" } });
@@ -4242,6 +5100,7 @@ app.post("/summarize-url", async (req, res) => {
     if (!pageContent || pageContent.length < 50)
       return res.json({ success: false, error: "Could not extract content from this URL." });
 
+    // Summarize with Gemini
     let summary = "", keyPoints = [], sentiment = "neutral";
     if (model) {
       try {
@@ -4274,7 +5133,10 @@ app.post("/summarize-url", async (req, res) => {
   }
 });
 
-// 4. CHAT EXPORT
+// ══════════════════════════════════════════════
+// 💬 4. CHAT EXPORT  (plain-text format)
+// POST /export-chat  { messages: [], format: "txt"|"md", title: "" }
+// ══════════════════════════════════════════════
 app.post("/export-chat", (req, res) => {
   try {
     const { messages = [], format = "txt", title = "RanAI Chat" } = req.body;
@@ -4314,7 +5176,10 @@ app.post("/export-chat", (req, res) => {
   }
 });
 
-// 5. IMAGE GENERATION PRO
+// ══════════════════════════════════════════════
+// 🖼️ 5. IMAGE GENERATION (Pollinations AI — Free)
+// POST /generate-image-pro  { prompt, style, size }
+// ══════════════════════════════════════════════
 app.post("/generate-image-pro", async (req, res) => {
   try {
     const { prompt = "", style = "realistic", size = "square", negativePrompt = "" } = req.body;
@@ -4338,8 +5203,10 @@ app.post("/generate-image-pro", async (req, res) => {
     const encoded = encodeURIComponent(enhancedPrompt);
     const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?width=${width}&height=${height}&seed=${seed}&nologo=true&enhance=true`;
 
+    // Verify reachability
     await axios.head(imageUrl, { timeout: 10000 });
 
+    // Also generate variations (same prompt, diff seeds)
     const variations = [1, 2].map(i => {
       const vs = seed + i * 1337;
       return `https://image.pollinations.ai/prompt/${encoded}?width=${width}&height=${height}&seed=${vs}&nologo=true&enhance=true`;
@@ -4355,7 +5222,11 @@ app.post("/generate-image-pro", async (req, res) => {
   }
 });
 
-// 6. VOICE CONFIG
+// ══════════════════════════════════════════════
+// 🎤 6. ENHANCED VOICE MODE CONFIG
+// GET /voice-config  — returns voice settings & supported languages
+// POST /voice-enhance  { text, lang, speed, pitch }
+// ══════════════════════════════════════════════
 app.get("/voice-config", (req, res) => {
   res.json({
     success: true,
@@ -4388,6 +5259,7 @@ app.post("/voice-enhance", async (req, res) => {
     const { text = "", lang = "hi", speed = "normal", mode = "natural" } = req.body;
     if (!text.trim()) return res.status(400).json({ success: false, error: "Text required" });
 
+    // AI-enhance the text for better speech
     let enhancedText = text;
     if (model) {
       try {
@@ -4431,7 +5303,10 @@ Text: ${text.slice(0, 500)}`;
   }
 });
 
-// 7. TRANSLATE
+// ══════════════════════════════════════════════
+// 🌍 7. AUTO LANGUAGE TRANSLATOR
+// POST /translate  { text, from, to, autoDetect }
+// ══════════════════════════════════════════════
 app.post("/translate", async (req, res) => {
   try {
     const { text = "", from = "auto", to = "en", autoDetect = true } = req.body;
@@ -4450,6 +5325,7 @@ app.post("/translate", async (req, res) => {
 
     let translated = "", detectedFrom = from, confidence = 0;
 
+    // Primary: Gemini translation
     if (model) {
       try {
         const detectPrompt = autoDetect || from === "auto"
@@ -4465,6 +5341,7 @@ app.post("/translate", async (req, res) => {
       } catch (_) {}
     }
 
+    // Fallback: Tavily-assisted
     if (!translated && OPENAI_API_KEY && OPENAI_API_KEY !== "YOUR_OPENAI_API_KEY_HERE") {
       try {
         const r = await axios.post("https://api.openai.com/v1/chat/completions", {
@@ -4499,7 +5376,10 @@ app.post("/translate", async (req, res) => {
   }
 });
 
-// 8. CHAT ANALYTICS
+// ══════════════════════════════════════════════
+// 📊 8. CHAT ANALYTICS DASHBOARD
+// POST /chat-analytics  { messages: [], userId: "" }
+// ══════════════════════════════════════════════
 app.post("/chat-analytics", async (req, res) => {
   try {
     const { messages = [] } = req.body;
@@ -4508,6 +5388,7 @@ app.post("/chat-analytics", async (req, res) => {
     const userMsgs = messages.filter(m => m.role === "user");
     const botMsgs = messages.filter(m => m.role === "assistant" || m.role === "bot");
 
+    // Word frequency
     const wordFreq = {};
     const stopWords = new Set(["the","a","an","is","it","to","of","and","in","that","was","he","for","on","are","with","as","at","this","his","they","be","from","or","had","by","but","not","what","all","were","we","when","your","can","said","there","use","an","each","which","do","how","their","if","will","up","other","about","out","many","then","them","these","so","some","her","would","make","like","into","him","time","has","look","more","write","go","see","number","no","way","could","people","my","than","first","water","been","call","who","oil","sit","now","find","long","down","day","did","get","come","made","may","part"]);
 
@@ -4522,6 +5403,7 @@ app.post("/chat-analytics", async (req, res) => {
     const topWords = Object.entries(wordFreq).sort((a, b) => b[1] - a[1]).slice(0, 15)
       .map(([word, count]) => ({ word, count }));
 
+    // Language breakdown
     let hiCount = 0, enCount = 0, mixCount = 0;
     for (const m of userMsgs) {
       const txt = m.content || m.text || "";
@@ -4532,6 +5414,7 @@ app.post("/chat-analytics", async (req, res) => {
       else enCount++;
     }
 
+    // Avg message length
     const avgUserLen = userMsgs.length
       ? Math.round(userMsgs.reduce((s, m) => s + (m.content || m.text || "").length, 0) / userMsgs.length)
       : 0;
@@ -4539,9 +5422,11 @@ app.post("/chat-analytics", async (req, res) => {
       ? Math.round(botMsgs.reduce((s, m) => s + (m.content || m.text || "").length, 0) / botMsgs.length)
       : 0;
 
+    // Question type analysis
     const howMany = userMsgs.filter(m => /\b(kya|what|how|why|when|where|who|which|kaise|kab|kahan|kaun|kyun)\b/i.test(m.content || m.text || "")).length;
     const greetings = userMsgs.filter(m => /\b(hi|hello|hey|namaste|hlo|hii|good morning|good night)\b/i.test(m.content || m.text || "")).length;
 
+    // AI-generated insight
     let aiInsight = null;
     if (model && messages.length >= 3) {
       try {
@@ -4581,6 +5466,10 @@ app.post("/chat-analytics", async (req, res) => {
     res.status(500).json({ success: false, error: "Analytics failed" });
   }
 });
+
+// ══════════════════════════════════════════════════════════════════
+// END OF NEW FEATURES
+// ══════════════════════════════════════════════════════════════════
 
 // ========== GLOBAL ERROR HANDLER ==========
 app.use((err, req, res, _next) => {
