@@ -5004,4 +5004,4 @@ app.listen(PORT, () => {
   console.log(`🎤 Voice config: GET /voice-config | POST /voice-enhance`);
   console.log(`🌍 Translator: POST /translate`);
   console.log(`📊 Chat analytics: POST /chat-analytics`);
-});
+}); 
