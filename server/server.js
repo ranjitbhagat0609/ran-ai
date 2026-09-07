@@ -3437,25 +3437,86 @@ app.post('/tts', async (req, res) => {
   }
 });
 
-// ADDED CODE START — Pollinations Image Generation Endpoint
+// ========== PIXAZO IMAGE GENERATION (Flux Schnell — free tier) ==========
+// ⚠️ Move this to an environment variable (process.env.PIXAZO_API_KEY) before
+// pushing to a public repo — hardcoded keys get scraped from GitHub fast.
+const PIXAZO_API_KEY = "0a6256881b84496e8b73599bd955fa7c";
+
+async function generateImageWithPixazo(prompt) {
+  const headers = {
+    "Content-Type": "application/json",
+    "Ocp-Apim-Subscription-Key": PIXAZO_API_KEY,
+  };
+
+  // 1) Submit the generation request
+  const submitRes = await axios.post(
+    "https://gateway.pixazo.ai/flux/text-to-image",
+    { prompt },
+    { headers, timeout: 15000 }
+  );
+
+  // Some Pixazo models return the image straight away, others return a
+  // request_id that has to be polled — handle both shapes.
+  const immediateUrl =
+    submitRes.data?.output?.media_url?.[0] ||
+    submitRes.data?.media_url?.[0] ||
+    submitRes.data?.imageUrl;
+  if (immediateUrl) return immediateUrl;
+
+  const requestId = submitRes.data?.request_id;
+  if (!requestId) throw new Error("Pixazo did not return a request_id or image URL");
+
+  // 2) Poll the status endpoint until the image is ready
+  const maxAttempts = 20; // ~40s max
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const statusRes = await axios.get(
+      `https://gateway.pixazo.ai/v2/requests/status/${requestId}`,
+      { headers, timeout: 10000 }
+    );
+    const status = statusRes.data?.status;
+    if (status === "COMPLETED") {
+      const url = statusRes.data?.output?.media_url?.[0];
+      if (url) return url;
+      throw new Error("Pixazo completed but returned no media_url");
+    }
+    if (status === "ERROR" || status === "FAILED") {
+      throw new Error(statusRes.data?.error || "Pixazo generation failed");
+    }
+    // otherwise still QUEUED/PROCESSING — keep polling
+  }
+  throw new Error("Pixazo generation timed out");
+}
+
+// ADDED CODE START — Image Generation Endpoint (Pixazo primary, Pollinations fallback)
 app.post("/generate-image", async (req, res) => {
   const { prompt } = req.body;
   if (!prompt || !prompt.trim()) {
     return res.status(400).json({ success: false, error: "Prompt required" });
   }
-  const encoded = encodeURIComponent(prompt.trim());
+  const cleanPrompt = prompt.trim();
+
+  try {
+    const imageUrl = await generateImageWithPixazo(cleanPrompt);
+    console.log("✅ Pixazo image generated:", imageUrl);
+    return res.json({ success: true, imageUrl, provider: "pixazo" });
+  } catch (err) {
+    console.warn("⚠️ Pixazo failed, falling back to Pollinations:", err.message);
+  }
+
+  // Fallback: Pollinations (free, no key needed)
+  const encoded = encodeURIComponent(cleanPrompt);
   const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?nologo=true&width=768&height=512&seed=${Date.now()}`;
   try {
-    // Verify image is reachable
     await axios.head(imageUrl, { timeout: 8000 });
     console.log("✅ Pollinations image generated:", imageUrl);
-    return res.json({ success: true, imageUrl });
+    return res.json({ success: true, imageUrl, provider: "pollinations" });
   } catch (err) {
-    console.error("❌ Pollinations image failed:", err.message);
+    console.error("❌ Both Pixazo and Pollinations failed:", err.message);
     return res.status(500).json({ success: false, error: "Image generation failed" });
   }
 });
-// ADDED CODE END — Pollinations Image Generation Endpoint
+// ADDED CODE END — Image Generation Endpoint
 
 // ========== IMAGE ANALYSIS (unchanged, works with Gemini Vision) ==========
 async function getImageCaptionDeepAI(imageBuffer, mimeType) {
