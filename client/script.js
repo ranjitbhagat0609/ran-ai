@@ -1310,37 +1310,38 @@ async function handleImageGeneration(prompt) {
 
   const bubble = addImageLoadingBubble();
 
-  const seeds = [Date.now(), Math.floor(Math.random()*99999), 42];
-  let lastErr = null;
+  try {
+    const res = await fetch('/generate-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    });
+    const data = await res.json();
 
-  for (const seed of seeds) {
-    const encoded  = encodeURIComponent(prompt);
-    const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?nologo=true&width=768&height=512&seed=${seed}&enhance=true`;
-    try {
+    if (data.success && data.imageUrl) {
+      // Preload so the bubble doesn't flash a broken image icon
       await new Promise((resolve, reject) => {
         const img   = new Image();
-        const timer = setTimeout(() => { img.src = ''; reject(new Error('timeout')); }, 15000);
+        const timer = setTimeout(() => reject(new Error('timeout')), 20000);
         img.onload  = () => { clearTimeout(timer); resolve(); };
         img.onerror = () => { clearTimeout(timer); reject(new Error('load error')); };
-        img.src = imageUrl;
+        img.src = data.imageUrl;
       });
-      if (bubble) fillImageBubble(bubble, imageUrl, prompt);
+      if (bubble) fillImageBubble(bubble, data.imageUrl, prompt);
       shouldSpeakNextReply = false;
       return;
-    } catch (err) {
-      lastErr = err;
-      console.warn(`[Image Gen] seed ${seed} failed:`, err.message);
     }
+    throw new Error(data.error || 'Image generation failed');
+  } catch (err) {
+    console.error('[Image Gen] failed:', err.message);
+    const lang = detectLanguage(prompt);
+    const errMsg = lang === 'hi'
+      ? '❌ Image generate nahi ho saka. Thodi der baad try karo ya prompt thoda change karo.'
+      : '❌ Image generation failed. Please try a different prompt or try again in a moment.';
+    if (bubble) bubble.innerHTML = `<span class="poll-error">${errMsg}</span>`;
+    scrollToBottom();
+    shouldSpeakNextReply = false;
   }
-
-  console.error('[Image Gen] All retries failed:', lastErr && lastErr.message);
-  const lang = detectLanguage(prompt);
-  const errMsg = lang === 'hi'
-    ? '❌ Image generate nahi ho saka. Thodi der baad try karo ya prompt thoda change karo.'
-    : '❌ Image generation failed. Please try a different prompt or try again in a moment.';
-  if (bubble) bubble.innerHTML = `<span class="poll-error">${errMsg}</span>`;
-  scrollToBottom();
-  shouldSpeakNextReply = false;
 }
 const bubble_ref_hack = null;
 
